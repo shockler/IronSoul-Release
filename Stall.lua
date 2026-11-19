@@ -69,6 +69,12 @@ local function number(t, ...)
     end
     return nil
 end
+local function positiveUserId(stall)
+    if type(stall)~="table" then return nil end
+    local n=tonumber(stall.OwnerUserId)
+    if n and n==math.floor(n) and n>0 and n<1e14 then return n end
+    return nil
+end
 local function str(t, ...)
     if type(t) ~= "table" then return nil end
     for i=1, select("#", ...) do
@@ -282,7 +288,7 @@ local function normalizeListing(v,key,s,stall,detail)
         Min=info and number(info,"MinPrice") or nil,
         Max=info and number(info,"MaxPrice") or nil,
         Owner=str(stall,"OwnerName","Username","UserName") or "?",
-        OwnerUserId=number(stall,"OwnerUserId"),
+        OwnerUserId=positiveUserId(stall),
         ListingId=listingId,IdSource=idSource,Detail=detail==true,
         Raw=v,RawKey=tostring(key),
     }
@@ -736,7 +742,7 @@ local function field(parent,placeholder,x,y,w,h,default)
     b.TextSize=14;b.Position=UDim2.new(x,0,y,0);b.Size=UDim2.new(w,0,h,0)
     return b
 end
-local status=label(panel,"SCAN → DEEP QUẦY CÓ NGƯỜI | chỉ Mythic đủ 4 dòng, ≥3 chỉ số DPS.",.014,.151,.97,.048,12)
+local status=label(panel,"SCAN → DEEP QUẦY CÓ NGƯỜI | xem mọi Scroll, kiểm tra đúng listing trước khi mua.",.014,.151,.97,.048,12)
 status.TextColor3=Color.Mute
 local stats=label(panel,"",.014,.208,.97,.035,12,true)
 local function say(message)
@@ -775,11 +781,30 @@ local function allRows()
     end
     return rows
 end
+-- Compare purchase identity, not a display fingerprint: BoothShows and StallView
+-- may expose different fields for the SAME listing. Never relax owner/id/price.
+local function samePurchaseTarget(a,b)
+    if not a or not b or a.Type~="Scroll" or b.Type~="Scroll" then return false end
+    if not a.OwnerUserId or not b.OwnerUserId or
+        a.OwnerUserId~=b.OwnerUserId or a.Slot~=b.Slot then return false end
+    if not a.ListingId or b.ListingId~=a.ListingId or a.Id~=b.Id then return false end
+    if not a.Price or a.Price<=0 or b.Price~=a.Price then return false end
+    if a.Rarity~=nil and b.Rarity~=a.Rarity then return false end
+    if a.StatCount>0 then
+        if b.StatCount~=a.StatCount or
+            table.concat(a.Stats,"|")~=table.concat(b.Stats,"|") then return false end
+    end
+    return true
+end
+local function purchaseKey(r)
+    return table.concat({tostring(r.Slot),tostring(r.OwnerUserId),
+        tostring(r.Id),tostring(r.ListingId),tostring(r.Price)},"|")
+end
 local function matchingDetail(original)
     local last=state.Full[original.Slot]
-    if type(last)~="table" then return nil end
+    if type(last)~="table" or positiveUserId(last)~=original.OwnerUserId then return nil end
     for _,r in ipairs(extractItems(last,original.Slot,true)) do
-        if fingerprint(r)==fingerprint(original) then return r end
+        if samePurchaseTarget(original,r) then return r end
     end
     return nil
 end
@@ -812,7 +837,7 @@ local function getFiltered()
     for _,r in ipairs(all) do
         local joined=(r.Name.." "..r.Id.." "..r.Owner.." "..
             table.concat(r.Stats," ")):lower()
-        if r.Pass and (q=="" or joined:find(q,1,true)) and
+        if (q=="" or joined:find(q,1,true)) and
             (not mn or r.Price and r.Price>=mn) and
             (not mx or r.Price and r.Price<=mx) then
             result[#result+1]=r
@@ -931,8 +956,8 @@ end
 
 local function purchaseClick(r)
     if not state.Alive then return end
-    if not r.Pass or r.Rarity~=6 or r.StatCount~=4 or r.Matched<3 then
-        say("KHÔNG MUA: phải là Mythic R6 / đúng 4 dòng / >=3 nhóm DPS.")
+    if not r or r.Type~="Scroll" then
+        say("KHÔNG MUA: dòng hiện tại không phải listing Scroll.")
         return
     end
     if state.Busy or state.PurchaseBusy then
@@ -951,12 +976,10 @@ local function purchaseClick(r)
     local pending=state.PendingPurchase
     local now=os.clock()
     if pending and pending.Ready and pending.Expires>now and
-        pending.Fingerprint==fingerprint(r) then
-        local live=matchingDetail(r)
-        if not live or not live.Pass or not live.ListingId
-            or live.ListingId~=r.ListingId or live.OwnerUserId~=r.OwnerUserId
-            or live.Price~=r.Price or live.Rarity~=6
-            or live.StatCount~=4 or live.Matched<3 then
+        pending.Fingerprint==purchaseKey(r) then
+        local live=matchingDetail(pending.Selected)
+        if not live or not samePurchaseTarget(pending.Selected,r)
+            or not samePurchaseTarget(r,live) then
             state.PendingPurchase=nil
             say("Listing thay đổi hoặc đã bán; MUA bị hủy, hãy scan lại.")
             state.Dirty=true
@@ -987,8 +1010,8 @@ local function purchaseClick(r)
         state.Dirty=true
         return
     end
-    local selected=fingerprint(r)
-    local req={Fingerprint=selected,Slot=r.Slot,Ready=false,Expires=now+8}
+    local selected=purchaseKey(r)
+    local req={Fingerprint=selected,Selected=r,Slot=r.Slot,Ready=false,Expires=now+8}
     state.PendingPurchase=req;state.PurchaseBusy=true;state.Dirty=true
     say("Đang đọc lại quầy #"..r.Slot.." để xác minh giá/ID Scroll trước khi mua...")
     task.spawn(function()
@@ -1008,10 +1031,8 @@ local function purchaseClick(r)
                 task.wait(.08)
             end
             if state.PendingPurchase==req then
-                if verified and verified.Detail and verified.Pass and
-                    verified.Rarity==6 and verified.StatCount==4 and
-                    verified.Matched>=3 and verified.OwnerUserId==r.OwnerUserId
-                    and verified.ListingId==r.ListingId and verified.Price==r.Price then
+                if verified and verified.Detail and
+                    samePurchaseTarget(r,verified) then
                     req.Ready=true;req.Expires=os.clock()+8
                     say("ĐÃ XÁC MINH: "..r.Name.." | "..fmt(r.Price).."$ | "..r.Owner..
                         ". Bấm XÁC NHẬN MUA trong 8 giây để gửi Purchase.")
@@ -1156,7 +1177,7 @@ local function render()
         local r=filtered[idx]
         display=display+1
         local row=base(display+1,58,display%2==0 and Color.Panel or Color.BG)
-        cell(row,r.Name.."\n#"..r.Slot.." · MYTHIC · "..r.Matched.."/5 DPS",
+        cell(row,r.Name.."\n#"..r.Slot.." · R"..tostring(r.Rarity or "?").." · "..r.Matched.."/5 DPS",
             0,widths[1],11,true)
         cell(row,r.Owner,widths[1],widths[2],11,true)
         local x=widths[1]+widths[2]
@@ -1174,7 +1195,7 @@ local function render()
         cell(row,fmt(r.Price).." $",x,widths[7],12,true)
         x=x+widths[7]
         local pending=state.PendingPurchase
-        local isPending=pending and pending.Fingerprint==fingerprint(r)
+        local isPending=pending and pending.Fingerprint==purchaseKey(r)
         local action=(not r.ListingId) and "ID?" or
             (isPending and (pending.Ready and "XÁC NHẬN" or "ĐANG ĐỌC") or "MUA")
         button(row,action,x+.003,.21,widths[8]-.006,.59,
