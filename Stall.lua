@@ -811,7 +811,7 @@ end
 local search=field(panel,"Tên Scroll / Skill / chỉ số / người bán",.014,.092,.37,.050,"")
 local minPrice=field(panel,"Min $",.392,.092,.14,.050,"")
 local maxPrice=field(panel,"Max $",.541,.092,.14,.050,"")
-label(panel,"STALL MARKET v5 | SCAN / MUA / BÁN ORE",.014,.018,.72,.058,15,true)
+label(panel,"STALL MARKET v5 | SCAN / MUA / BÁN ORE + SCROLL",.014,.018,.72,.058,15,true)
 button(panel,"H ẨN",.730,.017,.126,.055,function()panel.Visible=false end)
 button(panel,"X",.864,.017,.122,.055,function() state.Stop() end,Color.Red)
 local list=Instance.new("ScrollingFrame",panel)
@@ -1267,8 +1267,7 @@ hidePlayersBtn=button(panel,"ẨN NGƯỜI: OFF",.849,.093,.138,.050,function()
     say("ẨN NGƯỜI "..(perf.HidePlayers and "ON" or "OFF").."; không ẩn Booth.")
 end)
 
--- MARKET V5 SELL PANEL: uses verified TRADE-004 Ore ListStack protocol.
--- Scroll listing intentionally disabled until an actual scroll listing payload is captured.
+-- MARKET V5 SELL PANEL: Ore ListStack, Scroll List(UUID, price), manual/bulk tiers.
 local sale=Instance.new("Frame",panel)
 sale.Name="SalePanel";sale.Visible=false
 sale.BackgroundColor3=Color.BG;sale.BorderSizePixel=0
@@ -1411,10 +1410,10 @@ local function sellOre(id,stacksField,qtyField,priceField,minToggle,btn)
     end)
 end
 local function refreshSale()
+    if saleBusy then saleMsg("Đang gửi; chờ xong mới quét lại.");return end
     saleTitle.Text="BÁN ORE | ListStack | Giá Min game"
     bulkPending=nil
     writeSaleHeader(ORE_COLUMNS,false)
-    if saleBusy then saleMsg("Đang gửi; chờ xong mới quét lại.");return end
     local bag,err=oreBag()
     if not bag then saleMsg(err);return end
     for _,c in ipairs(saleRows:GetChildren()) do if c:IsA("Frame") then c:Destroy() end end
@@ -1664,9 +1663,9 @@ local function sellTier(tier)
         end
         saleBusy=false
         if state.Alive then
-            saleMsg("Nhóm "..tier..": gửi "..sent.."/"..#list.." lệnh; bỏ qua "..
-                failed..". Kiểm tra game để xác nhận listing.")
             refreshScrollSale()
+            saleMsg("Nhóm "..tier..": gửi "..sent.."/"..#list.." lệnh; bỏ qua "..
+                failed..". Kiểm tra quầy game để xác nhận listing.")
         end
     end)
 end
@@ -1767,7 +1766,8 @@ refreshScrollSale=function()
 end
 sellButton(sale,"QUÉT ORE",.018,.072,.18,.05,refreshSale)
 sellButton(sale,"DỪNG BÁN",.215,.072,.18,.05,function()
-    saleStop=true;saleMsg("Đã yêu cầu dừng sau lệnh hiện tại.")
+    saleStop=true;bulkPending=nil;updateBulkButtons()
+    saleMsg("Đã yêu cầu dừng sau lệnh hiện tại; đã hủy xác nhận bán nhóm.")
 end)
 sellButton(sale,"QUÉT SCROLL",.425,.072,.32,.05,refreshScrollSale)
 
