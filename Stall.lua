@@ -954,6 +954,7 @@ local function purchaseClick(r)
         pending.Fingerprint==fingerprint(r) then
         local live=matchingDetail(r)
         if not live or not live.Pass or not live.ListingId
+            or live.ListingId~=r.ListingId or live.OwnerUserId~=r.OwnerUserId
             or live.Price~=r.Price or live.Rarity~=6
             or live.StatCount~=4 or live.Matched<3 then
             state.PendingPurchase=nil
@@ -964,8 +965,9 @@ local function purchaseClick(r)
         state.PendingPurchase=nil
         state.PurchaseBusy=true
         local ok,err=pcall(function()
-            -- Confirmed source protocol: BoothController.RequestPurchase(slotIndex, listingId)
-            BoothRE:FireServer("Purchase",r.Slot,r.ListingId)
+            -- RemoteSpy verified from native stall purchase: Purchase(ownerUserId, listingId)
+            -- Slot is used only for InteractStall / detail verification.
+            BoothRE:FireServer("Purchase",r.OwnerUserId,r.ListingId)
         end)
         if ok then
             state.PurchasesSent=state.PurchasesSent+1
@@ -1008,7 +1010,8 @@ local function purchaseClick(r)
             if state.PendingPurchase==req then
                 if verified and verified.Detail and verified.Pass and
                     verified.Rarity==6 and verified.StatCount==4 and
-                    verified.Matched>=3 and verified.OwnerUserId==r.OwnerUserId then
+                    verified.Matched>=3 and verified.OwnerUserId==r.OwnerUserId
+                    and verified.ListingId==r.ListingId and verified.Price==r.Price then
                     req.Ready=true;req.Expires=os.clock()+8
                     say("ĐÃ XÁC MINH: "..r.Name.." | "..fmt(r.Price).."$ | "..r.Owner..
                         ". Bấm XÁC NHẬN MUA trong 8 giây để gửi Purchase.")
