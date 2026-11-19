@@ -1274,9 +1274,9 @@ sale.Name="SalePanel";sale.Visible=false
 sale.BackgroundColor3=Color.BG;sale.BorderSizePixel=0
 sale.Position=UDim2.new(.008,0,.076,0);sale.Size=UDim2.new(.984,0,.906,0)
 sale.ZIndex=20
-local saleTitle=label(sale,"BÁN ORE | ListStack Remote | Giá Min game",.018,.008,.70,.055,17,true)
+local saleTitle=label(sale,"BÁN ORE / SCROLL | Remote Booth",.018,.008,.70,.055,17,true)
 saleTitle.ZIndex=21
-local saleStatus=label(sale,"Bấm QUÉT TÚI. Min Price lấy từ ResBoothTradeable; không đoán giá.",.018,.912,.95,.066,12,false,true)
+local saleStatus=label(sale,"Chọn QUÉT ORE hoặc QUÉT SCROLL. Scroll cần có UUID riêng.",.018,.912,.95,.066,12,false,true)
 saleStatus.ZIndex=21
 local saleRows=Instance.new("ScrollingFrame",sale)
 saleRows.Name="SaleRows";saleRows.BackgroundColor3=Color.Panel
@@ -1371,6 +1371,7 @@ local function sellOre(id,stacksField,qtyField,priceField,minToggle,btn)
     end)
 end
 local function refreshSale()
+    saleTitle.Text="BÁN ORE | ListStack | Giá Min game"
     if saleBusy then saleMsg("Đang gửi; chờ xong mới quét lại.");return end
     local bag,err=oreBag()
     if not bag then saleMsg(err);return end
@@ -1408,11 +1409,167 @@ local function refreshSale()
     end
     saleMsg("Đã đọc "..#ids.." loại Ore. Scroll bán chưa có payload Remote được xác minh.")
 end
-sellButton(sale,"QUÉT TÚI",.018,.072,.18,.05,refreshSale)
-sellButton(sale,"DỪNG BÁN",.215,.072,.18,.05,function()saleStop=true;saleMsg("Đã yêu cầu dừng sau lệnh hiện tại.")end)
-sellButton(sale,"SCROLL: CHƯA XÁC MINH",.425,.072,.33,.05,function()
-    saleMsg("Không gửi ListStack Scroll khi chưa biết đúng loại ID/UUID và cấu trúc Remote.")
+-- Scroll listing: RemoteSpy and BoothController verify List(UUID, price).
+-- Inventory formats can vary; only actual UUIDs from owned records are listed.
+local function validScrollUUID(s)
+    return type(s)=="string" and #s>=16 and #s<=128 and
+        s:match("^[%w_%-]+$")~=nil and s:lower():sub(1,7)~="scroll_"
+end
+local function scrollResource(v)
+    if type(v)~="table" then return nil end
+    for _,k in ipairs({"ItemID","ItemId","ScrollId","ScrollID",
+        "ResourceId","BaseId","Id"}) do
+        local id=v[k]
+        if type(id)=="string" and id:lower():sub(1,7)=="scroll_" then return id end
+    end
+    return nil
+end
+local function scanOwnedScrolls()
+    local items,seen,unresolved,diagnostics,sources={},{},0,{},{}
+    local function source(name,ok,val)
+        local found=ok and type(val)=="table"
+        diagnostics[#diagnostics+1]=name..":"..(found and "OK" or "N/A")
+        if found then sources[#sources+1]={Name=name,Value=val} end
+    end
+    if type(ScrollUtil)=="table" then
+        for _,method in ipairs({"GetOwned","GetOwnedScrolls","GetInventory","GetScrolls"}) do
+            if type(ScrollUtil[method])=="function" then
+                local ok,v=pcall(function()return ScrollUtil[method](ScrollUtil,LocalPlayer)end)
+                if not ok or type(v)~="table" then
+                    ok,v=pcall(function()return ScrollUtil[method](ScrollUtil)end)
+                end
+                source("ScrollUtil."..method,ok,v)
+            end
+        end
+    else diagnostics[#diagnostics+1]="ScrollUtil:MISSING" end
+    if dataUtil then
+        local paths={{"Scrolls","Owned"},{"Scroll","Owned"},
+            {"OwnedScrolls"},{"Scrolls"},{"ScrollInventory"}}
+        local ok,k=pcall(function()
+            local folder=RS:FindFirstChild("Enum")
+            local module=folder and folder:FindFirstChild("KeyString")
+            return module and require(module)
+        end)
+        local keys=ok and type(k)=="table" and k.ScrollUtil
+        local root=type(keys)=="table" and (keys.Scrolls or keys.Scroll or keys.Name)
+        local owned=type(keys)=="table" and (keys.Owned or keys.Inventory)
+        if type(root)=="string" then
+            table.insert(paths,1,{root})
+            if type(owned)=="string" then table.insert(paths,1,{root,owned}) end
+        end
+        local already={}
+        for _,path in ipairs(paths) do
+            local name=table.concat(path,"/")
+            if not already[name] then
+                already[name]=true
+                local ok,v=pcall(function()return dataUtil:GetValue(LocalPlayer,path)end)
+                source("DataUtil."..name,ok,v)
+            end
+        end
+    else diagnostics[#diagnostics+1]="DataUtil:MISSING" end
+    local function register(raw,key,origin)
+        if type(raw)~="table" then return false end
+        local id=scrollResource(raw)
+        if not id and raw.ItemType~="Scroll" and raw.Type~="Scroll" then return false end
+        local uuid=nil
+        for _,field in ipairs({"UUID","Uuid","UID","UniqueId",
+            "Guid","GUID","InstanceId","Id"}) do
+            if validScrollUUID(raw[field]) then uuid=raw[field];break end
+        end
+        if not uuid and validScrollUUID(key) then uuid=key end
+        if not uuid then unresolved=unresolved+1;return true end
+        if seen[uuid] then return true end
+        seen[uuid]=true
+        local name=id and scrollName(id,raw) or "Scroll (chưa rõ loại)"
+        local attrs=parseStats(raw)
+        local def=id and index["Scroll\0"..id]
+        local min=type(def)=="table" and intRange(def.MinPrice,1,1000000000) or nil
+        items[#items+1]={UUID=uuid,Id=id,Name=name,Attrs=attrs,
+            Rarity=raw.Rarity or raw.RarityId or raw.RarityID or raw.Grade,
+            Min=min,Source=origin,Blocked=raw.Equipped==true or
+                raw.IsEquipped==true or raw.Locked==true or raw.IsLocked==true}
+        return true
+    end
+    for _,src in ipairs(sources) do
+        local walked={}
+        local function walk(node,key,depth)
+            if depth>6 or type(node)~="table" or walked[node] then return end
+            walked[node]=true
+            if register(node,key,src.Name) then return end
+            for k,v in pairs(node) do
+                if type(v)=="table" then walk(v,k,depth+1)
+                elseif type(v)=="string" and v:lower():sub(1,7)=="scroll_"
+                    and validScrollUUID(k) then
+                    register({ItemId=v,UUID=k},k,src.Name)
+                end
+            end
+        end
+        walk(src.Value,nil,0)
+    end
+    table.sort(items,function(a,b)
+        if a.Name~=b.Name then return a.Name<b.Name end
+        return a.UUID<b.UUID
+    end)
+    return items,unresolved,table.concat(diagnostics," | ")
+end
+local function refreshScrollSale()
+    if saleBusy then saleMsg("Đang gửi lệnh bán; chưa quét lại.");return end
+    saleTitle.Text="BÁN SCROLL | Mỗi UUID riêng | Giá/Scroll"
+    for _,child in ipairs(saleRows:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    local items,unresolved,diagnostics=scanOwnedScrolls()
+    for _,record in ipairs(items) do
+        local row=Instance.new("Frame",saleRows)
+        row.BackgroundColor3=Color.Field
+        row.BorderSizePixel=0
+        row.Size=UDim2.new(1,-10,0,98)
+        row.ZIndex=22
+        local short=record.UUID:sub(1,6).."..."..record.UUID:sub(-5)
+        local attrText=#record.Attrs>0 and table.concat(record.Attrs," ; ") or "Chưa đọc được chỉ số"
+        local title=label(row,record.Name.." | R"..tostring(record.Rarity or "?")..
+            " | "..short.."\n"..attrText,.012,.03,.56,.87,11,true)
+        title.ZIndex=23
+        local price=field(row,"Giá bán",.583,.21,.172,.54,
+            record.Min and tostring(record.Min) or "")
+        price.ZIndex=24
+        local note=label(row,record.Min and ("Min: "..record.Min) or
+            "Nhập giá",.583,.79,.175,.18,10)
+        note.ZIndex=23
+        local btn
+        btn=sellButton(row,record.Blocked and "ĐANG DÙNG" or "BÁN",
+            .78,.22,.198,.52,function()
+            if record.Blocked then
+                saleMsg("Scroll đang dùng hoặc bị khóa: không gửi lệnh.")
+                return
+            end
+            if saleBusy then saleMsg("Đang gửi lệnh khác.");return end
+            local amount=intRange(price.Text,1,1000000000)
+            if not amount then saleMsg("Nhập giá nguyên hợp lệ (1..1 tỷ).");return end
+            saleBusy=true
+            local ok,err=pcall(function()
+                BoothRE:FireServer("List",record.UUID,amount)
+            end)
+            saleBusy=false
+            if ok then
+                btn.Text="ĐÃ GỬI";btn.Active=false
+                saleMsg("Đã gửi List cho "..short.." giá "..amount..
+                    ". Hãy kiểm tra tại quầy để xác nhận đã đăng.")
+            else
+                saleMsg("Không gửi được List: "..tostring(err))
+            end
+        end)
+        if record.Blocked then btn.BackgroundColor3=Color.Red end
+    end
+    saleMsg("Quét được "..#items.." Scroll có UUID; "..unresolved..
+        " thiếu UUID. "..diagnostics:sub(1,190))
+end
+sellButton(sale,"QUÉT ORE",.018,.072,.18,.05,refreshSale)
+sellButton(sale,"DỪNG BÁN",.215,.072,.18,.05,function()
+    saleStop=true;saleMsg("Đã yêu cầu dừng sau lệnh hiện tại.")
 end)
+sellButton(sale,"QUÉT SCROLL",.425,.072,.32,.05,refreshScrollSale)
+
 sellButton(sale,"ĐÓNG",.80,.008,.18,.055,function()sale.Visible=false end)
 button(panel,"BÁN HÀNG",.577,.017,.14,.055,function()
     sale.Visible=not sale.Visible
