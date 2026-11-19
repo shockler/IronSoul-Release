@@ -1278,10 +1278,19 @@ local saleTitle=label(sale,"BÁN ORE / SCROLL | Remote Booth",.018,.008,.70,.055
 saleTitle.ZIndex=21
 local saleStatus=label(sale,"Chọn QUÉT ORE hoặc QUÉT SCROLL. Scroll cần có UUID riêng.",.018,.912,.95,.066,12,false,true)
 saleStatus.ZIndex=21
+local bulkBar=Instance.new("Frame",sale)
+bulkBar.Name="QualityBulkBar";bulkBar.BackgroundTransparency=1
+bulkBar.Position=UDim2.new(.014,0,.138,0);bulkBar.Size=UDim2.new(.972,0,.062,0)
+bulkBar.Visible=false;bulkBar.ZIndex=23
+local saleHeader=Instance.new("Frame",sale)
+saleHeader.Name="SaleTableHeader";saleHeader.BorderSizePixel=0
+saleHeader.BackgroundColor3=Color.Field
+saleHeader.Position=UDim2.new(.014,0,.142,0)
+saleHeader.Size=UDim2.new(.972,0,.056,0);saleHeader.ZIndex=22
 local saleRows=Instance.new("ScrollingFrame",sale)
 saleRows.Name="SaleRows";saleRows.BackgroundColor3=Color.Panel
-saleRows.BorderSizePixel=0;saleRows.Position=UDim2.new(.014,0,.135,0)
-saleRows.Size=UDim2.new(.972,0,.765,0);saleRows.ScrollBarThickness=7
+saleRows.BorderSizePixel=0;saleRows.Position=UDim2.new(.014,0,.204,0)
+saleRows.Size=UDim2.new(.972,0,.695,0);saleRows.ScrollBarThickness=7
 saleRows.CanvasSize=UDim2.fromOffset(0,0);saleRows.ZIndex=21
 local saleLayout=Instance.new("UIListLayout",saleRows)
 saleLayout.Padding=UDim.new(0,5);saleLayout.SortOrder=Enum.SortOrder.LayoutOrder
@@ -1290,6 +1299,37 @@ saleLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 end)
 local saleBusy=false
 local saleStop=false
+local saleAttempted={}
+local bulkPending=nil
+local bulkButtons={}
+local scrollInventoryCache={}
+local function writeSaleHeader(columns,scrollMode)
+    bulkBar.Visible=scrollMode
+    saleHeader.Position=UDim2.new(.014,0,scrollMode and .210 or .142,0)
+    saleRows.Position=UDim2.new(.014,0,scrollMode and .272 or .204,0)
+    saleRows.Size=UDim2.new(.972,0,scrollMode and .628 or .695,0)
+    for _,child in ipairs(saleHeader:GetChildren()) do child:Destroy() end
+    for _,col in ipairs(columns) do
+        local item=Instance.new("TextLabel",saleHeader)
+        item.BackgroundTransparency=1
+        item.Text=col[1];item.Font=Enum.Font.GothamBold;item.TextSize=11
+        item.TextColor3=Color.Text;item.TextXAlignment=Enum.TextXAlignment.Center
+        item.Position=UDim2.new(col[2],0,0,0)
+        item.Size=UDim2.new(col[3],0,1,0)
+        item.ZIndex=23
+    end
+end
+local ORE_COLUMNS={
+    {"ORE / TỒN KHO",.010,.345},{"SỐ STACK",.365,.145},
+    {"VIÊN/STACK",.520,.155},{"GIÁ/VIÊN",.686,.120},
+    {"CHỌN GIÁ",.810,.068},{"BÁN",.883,.104},
+}
+local SCROLL_COLUMNS={
+    {"TÊN SCROLL",.006,.182},{"CHỈ SỐ 1",.189,.134},
+    {"CHỈ SỐ 2",.324,.134},{"CHỈ SỐ 3",.459,.134},
+    {"CHỈ SỐ 4",.594,.134},{"XỊN",.730,.058},
+    {"GIÁ",.793,.095},{"BÁN",.896,.090},
+}
 local function saleMsg(msg)
     saleStatus.Text=tostring(msg):sub(1,280)
     print("[STALL_V5_SELL] "..tostring(msg))
@@ -1372,6 +1412,8 @@ local function sellOre(id,stacksField,qtyField,priceField,minToggle,btn)
 end
 local function refreshSale()
     saleTitle.Text="BÁN ORE | ListStack | Giá Min game"
+    bulkPending=nil
+    writeSaleHeader(ORE_COLUMNS,false)
     if saleBusy then saleMsg("Đang gửi; chờ xong mới quét lại.");return end
     local bag,err=oreBag()
     if not bag then saleMsg(err);return end
@@ -1404,10 +1446,9 @@ local function refreshSale()
         buy=sellButton(item,"BÁN",.883,.19,.103,.55,function()
             sellOre(id,stacks,qty,price,mode,buy)
         end)
-        local note=label(item,"STACKS                 VIÊN/STACK                  GIÁ/VIÊN",.365,.78,.50,.20,10)
-        note.ZIndex=23
+        -- Column labels live in the fixed header and do not scroll with each row.
     end
-    saleMsg("Đã đọc "..#ids.." loại Ore. Scroll bán chưa có payload Remote được xác minh.")
+    saleMsg("Đã đọc "..#ids.." loại Ore. Số stack × viên/stack × giá/viên.")
 end
 -- Scroll listing: RemoteSpy and BoothController verify List(UUID, price).
 -- Inventory formats can vary; only actual UUIDs from owned records are listed.
@@ -1484,10 +1525,20 @@ local function scanOwnedScrolls()
         local attrs=parseStats(raw)
         local def=id and index["Scroll\0"..id]
         local min=type(def)=="table" and intRange(def.MinPrice,1,1000000000) or nil
+        local max=type(def)=="table" and intRange(def.MaxPrice,1,1000000000) or nil
+        local premium=0
+        for _,stat in ipairs(attrs) do
+            if stat:match("^Attack Bonus%s") or stat:match("^Skill Damage%s")
+                or stat:match("^Crit Rate%s") or stat:match("^Crit Damage%s") then
+                premium=premium+1
+            end
+        end
+        local quality=(#attrs>=1 and #attrs<=4 and premium<=4) and premium or nil
         items[#items+1]={UUID=uuid,Id=id,Name=name,Attrs=attrs,
             Rarity=raw.Rarity or raw.RarityId or raw.RarityID or raw.Grade,
-            Min=min,Source=origin,Blocked=raw.Equipped==true or
-                raw.IsEquipped==true or raw.Locked==true or raw.IsLocked==true}
+            Min=min,Max=max,Premium=quality,Source=origin,Blocked=raw.Equipped==true or
+                raw.IsEquipped==true or raw.Locked==true or raw.IsLocked==true or
+                raw.IsListed==true or raw.Listed==true}
         return true
     end
     for _,src in ipairs(sources) do
@@ -1512,57 +1563,207 @@ local function scanOwnedScrolls()
     end)
     return items,unresolved,table.concat(diagnostics," | ")
 end
-local function refreshScrollSale()
-    if saleBusy then saleMsg("Đang gửi lệnh bán; chưa quét lại.");return end
-    saleTitle.Text="BÁN SCROLL | Mỗi UUID riêng | Giá/Scroll"
+-- Pricing rules: 1 premium = Min; 2 = ceil(1.5 x Min);
+-- 3 = 4 x Min; 4 = Max. Official Max is always a hard cap.
+-- 0/unknown premium count: manual only, never bulk-sell.
+local function qualityPrice(record)
+    local tier=record.Premium
+    if not tier or tier<1 or tier>4 then return nil,"NO_QUALITY_TIER" end
+    if not record.Min then return nil,"MIN_UNAVAILABLE" end
+    if record.Max and record.Max<record.Min then return nil,"INVALID_PRICE_RANGE" end
+    local price
+    if tier==1 then price=record.Min
+    elseif tier==2 then price=math.ceil(record.Min*1.5)
+    elseif tier==3 then price=record.Min*4
+    else
+        if not record.Max then return nil,"MAX_UNAVAILABLE" end
+        price=record.Max
+    end
+    if record.Max then price=math.min(price,record.Max) end
+    if price>1000000000 or price<1 then return nil,"INVALID_PRICE" end
+    return price,nil
+end
+local function sameOwnedScroll(a,b)
+    return a.UUID==b.UUID and a.Id==b.Id and a.Premium==b.Premium and
+        table.concat(a.Attrs,"|")==table.concat(b.Attrs,"|") and
+        a.Min==b.Min and a.Max==b.Max and not b.Blocked
+end
+local function liveOwnedScroll(record)
+    local current=scanOwnedScrolls()
+    for _,item in ipairs(current) do
+        if sameOwnedScroll(record,item) then return true end
+    end
+    return false
+end
+local function sendScrollList(record,price)
+    if saleAttempted[record.UUID] then return false,"Đã gửi trong phiên này" end
+    if record.Blocked then return false,"Scroll khóa/đang dùng/đã đăng" end
+    if not validScrollUUID(record.UUID) then return false,"UUID không hợp lệ" end
+    if not intRange(price,1,1000000000) then return false,"Giá không hợp lệ" end
+    if record.Min and price<record.Min then return false,"Thấp hơn Min" end
+    if record.Max and price>record.Max then return false,"Cao hơn Max" end
+    if not liveOwnedScroll(record) then return false,"Scroll đã thay đổi hoặc không còn trong túi" end
+    local ok,err=pcall(function()
+        BoothRE:FireServer("List",record.UUID,price)
+    end)
+    if not ok then return false,tostring(err) end
+    saleAttempted[record.UUID]=true
+    return true,nil
+end
+local updateBulkButtons
+local refreshScrollSale
+local function sellTier(tier)
+    if saleBusy or not state.Alive then
+        saleMsg("Đang có lượt bán khác; không thể bắt đầu.")
+        return
+    end
+    local list={}
+    local skipped=0
+    for _,record in ipairs(scrollInventoryCache) do
+        if record.Premium==tier and not record.Blocked and
+            not saleAttempted[record.UUID] then
+            local amount=qualityPrice(record)
+            if amount then
+                list[#list+1]={Record=record,Price=amount}
+            else
+                skipped=skipped+1
+            end
+        end
+    end
+    if #list==0 then
+        saleMsg("Nhóm "..tier.." xịn không có Scroll đủ Min/Max và UUID để bán.")
+        return
+    end
+    local now=os.clock()
+    if not bulkPending or bulkPending.Tier~=tier or
+        bulkPending.Expires<now then
+        bulkPending={Tier=tier,Expires=now+9}
+        updateBulkButtons()
+        saleMsg("Chuẩn bị bán "..#list.." Scroll có "..tier..
+            " chỉ số xịn ("..skipped.." thiếu giá). BẤM LẠI NÚT trong 9 giây để xác nhận.")
+        task.delay(9,function()
+            if bulkPending and bulkPending.Tier==tier and
+                bulkPending.Expires<=os.clock() then
+                bulkPending=nil
+                updateBulkButtons()
+            end
+        end)
+        return
+    end
+    bulkPending=nil;updateBulkButtons()
+    saleBusy=true;saleStop=false
+    task.spawn(function()
+        local sent,failed=0,0
+        for i,entry in ipairs(list) do
+            if not state.Alive or saleStop then break end
+            local ok,msg=sendScrollList(entry.Record,entry.Price)
+            if ok then sent=sent+1 else failed=failed+1 end
+            saleMsg("BÁN NHÓM "..tier.." XỊN: đã gửi "..sent.."/"..#list..
+                ", bỏ qua "..failed..". "..(msg or "Chưa có ACK server"))
+            if i<#list and state.Alive and not saleStop then task.wait(.8) end
+        end
+        saleBusy=false
+        if state.Alive then
+            saleMsg("Nhóm "..tier..": gửi "..sent.."/"..#list.." lệnh; bỏ qua "..
+                failed..". Kiểm tra game để xác nhận listing.")
+            refreshScrollSale()
+        end
+    end)
+end
+local BULK_TITLES={
+    [1]="1 XỊN = MIN",[2]="2 XỊN = 1.5×MIN",
+    [3]="3 XỊN = 4×MIN",[4]="4 XỊN = MAX",
+}
+for tier=1,4 do
+    local indexTier=tier
+    bulkButtons[tier]=sellButton(bulkBar,BULK_TITLES[tier],
+        (tier-1)*.25+.003,.09,.243,.85,function()sellTier(indexTier)end)
+end
+updateBulkButtons=function()
+    local counts={[1]=0,[2]=0,[3]=0,[4]=0}
+    for _,record in ipairs(scrollInventoryCache) do
+        local q=record.Premium
+        if q and q>=1 and q<=4 and not record.Blocked
+            and not saleAttempted[record.UUID] and qualityPrice(record) then
+            counts[q]=counts[q]+1
+        end
+    end
+    for tier=1,4 do
+        local pending=bulkPending and bulkPending.Tier==tier and
+            bulkPending.Expires>os.clock()
+        local name=pending and "XÁC NHẬN "..tier.." XỊN" or
+            (BULK_TITLES[tier].." ("..counts[tier]..")")
+        bulkButtons[tier].Text=name
+        bulkButtons[tier].BackgroundColor3=pending and Color.Red or Color.Blue
+    end
+end
+refreshScrollSale=function()
+    if saleBusy then saleMsg("Đang gửi lệnh; chưa quét lại.");return end
+    saleTitle.Text="BÁN SCROLL | 4 CHỈ SỐ | NHÓM GIÁ TỰ ĐỘNG"
+    writeSaleHeader(SCROLL_COLUMNS,true)
+    bulkPending=nil
     for _,child in ipairs(saleRows:GetChildren()) do
         if child:IsA("Frame") then child:Destroy() end
     end
     local items,unresolved,diagnostics=scanOwnedScrolls()
+    scrollInventoryCache=items
     for _,record in ipairs(items) do
         local row=Instance.new("Frame",saleRows)
         row.BackgroundColor3=Color.Field
-        row.BorderSizePixel=0
-        row.Size=UDim2.new(1,-10,0,98)
-        row.ZIndex=22
-        local short=record.UUID:sub(1,6).."..."..record.UUID:sub(-5)
-        local attrText=#record.Attrs>0 and table.concat(record.Attrs," ; ") or "Chưa đọc được chỉ số"
-        local title=label(row,record.Name.." | R"..tostring(record.Rarity or "?")..
-            " | "..short.."\n"..attrText,.012,.03,.56,.87,11,true)
-        title.ZIndex=23
-        local price=field(row,"Giá bán",.583,.21,.172,.54,
-            record.Min and tostring(record.Min) or "")
+        row.BorderSizePixel=0;row.Size=UDim2.new(1,-10,0,72);row.ZIndex=22
+        local shortName=record.Name
+        local name=label(row,shortName,.008,.07,.176,.83,11,true)
+        name.ZIndex=23
+        for k=1,4 do
+            local stat=record.Attrs[k] or ""
+            local statCell=label(row,stat,.189+(k-1)*.135,.06,.133,.87,11,false)
+            statCell.ZIndex=23
+            if stat:match("^Attack Bonus%s") or stat:match("^Skill Damage%s")
+                or stat:match("^Crit Rate%s") or stat:match("^Crit Damage%s") then
+                statCell.TextColor3=Color3.fromRGB(128,225,170)
+            end
+        end
+        local tier=record.Premium
+        local tierCell=label(row,tier and tostring(tier) or "?",.730,.12,.056,.73,14,true)
+        tierCell.TextXAlignment=Enum.TextXAlignment.Center;tierCell.ZIndex=23
+        local autoPrice=qualityPrice(record)
+        local displayedPrice=autoPrice or record.Min
+        local price=field(row,"Giá",.795,.17,.093,.52,
+            displayedPrice and tostring(displayedPrice) or "")
         price.ZIndex=24
-        local note=label(row,record.Min and ("Min: "..record.Min) or
-            "Nhập giá",.583,.79,.175,.18,10)
+        local guide=record.Min and
+            ("Min "..record.Min..(record.Max and (" / Max "..record.Max) or ""))
+            or "Thiếu Min"
+        local note=label(row,guide,.789,.72,.10,.26,9,false)
         note.ZIndex=23
-        local btn
-        btn=sellButton(row,record.Blocked and "ĐANG DÙNG" or "BÁN",
-            .78,.22,.198,.52,function()
-            if record.Blocked then
-                saleMsg("Scroll đang dùng hoặc bị khóa: không gửi lệnh.")
+        local already=record.Blocked or saleAttempted[record.UUID]
+        local buttonText=record.Blocked and "KHÓA" or
+            (saleAttempted[record.UUID] and "ĐÃ GỬI" or "BÁN")
+        local sell
+        sell=sellButton(row,buttonText,.895,.19,.093,.54,function()
+            if saleBusy then saleMsg("Đang gửi lệnh khác.");return end
+            if record.Blocked or saleAttempted[record.UUID] then
+                saleMsg("Scroll đang bị khóa/đã gửi lệnh trong phiên này.")
                 return
             end
-            if saleBusy then saleMsg("Đang gửi lệnh khác.");return end
             local amount=intRange(price.Text,1,1000000000)
-            if not amount then saleMsg("Nhập giá nguyên hợp lệ (1..1 tỷ).");return end
+            if not amount then saleMsg("Nhập giá nguyên từ 1 đến 1 tỷ.");return end
             saleBusy=true
-            local ok,err=pcall(function()
-                BoothRE:FireServer("List",record.UUID,amount)
-            end)
+            local ok,err=sendScrollList(record,amount)
             saleBusy=false
             if ok then
-                btn.Text="ĐÃ GỬI";btn.Active=false
-                saleMsg("Đã gửi List cho "..short.." giá "..amount..
-                    ". Hãy kiểm tra tại quầy để xác nhận đã đăng.")
-            else
-                saleMsg("Không gửi được List: "..tostring(err))
-            end
+                sell.Text="ĐÃ GỬI";sell.BackgroundColor3=Color.Green
+                saleMsg("Đã gửi List cho "..record.Name.." giá "..amount..
+                    ". Hãy kiểm tra quầy game để xác nhận.")
+            else saleMsg("Không gửi: "..tostring(err)) end
+            updateBulkButtons()
         end)
-        if record.Blocked then btn.BackgroundColor3=Color.Red end
+        if already then sell.BackgroundColor3=Color.Red end
     end
-    saleMsg("Quét được "..#items.." Scroll có UUID; "..unresolved..
-        " thiếu UUID. "..diagnostics:sub(1,190))
+    updateBulkButtons()
+    saleMsg("Quét "..#items.." Scroll; "..unresolved.." thiếu UUID. 4 chỉ số xịn: "..
+        "Attack Bonus, Skill Damage, Crit Rate, Crit Damage. "..
+        diagnostics:sub(1,80))
 end
 sellButton(sale,"QUÉT ORE",.018,.072,.18,.05,refreshSale)
 sellButton(sale,"DỪNG BÁN",.215,.072,.18,.05,function()
