@@ -111,7 +111,7 @@ x.tick(9.99)
 assert(#x.moves==0,"Must wait ten seconds before walking")
 x.tick(10.00)
 assert(x.rt.EndlessSafeEntryPhase=="APPROACH" and #x.moves==1)
-assert(x.moves[1].X==staging.X and x.moves[1].Z==staging.Z-12,"Walk straight forward in bounded steps; never a fixed arena TP")
+assert(x.moves[1].X==x.door.Position.X and x.moves[1].Z==x.door.Position.Z,"DEV walks to the live forward door; never a fixed arena TP")
 x.root.Position=x.door.Position+vec(0,0,3)
 x.tick(10.60)
 assert(x.rt.EndlessSafeEntryPhase=="HANDOFF")
@@ -192,11 +192,11 @@ assert(off.rt.Owner==nil and off.rt.RouteBusy==false)
 
 print("ENDLESS SAFE ENTRY PASS: 10s wait, straight fallback, game handoff, floor-release Combat, stuck-flag, death/off")
 
--- A visible portal to the side must not steer the forward walk.
+-- DEV selects the visible forward portal instead of blind forward stepping.
 local sideways=scenario()
 sideways.door.Position=staging+vec(12,0,-24)
 sideways.tick(0);sideways.tick(10)
-assert(sideways.moves[1].X==staging.X and sideways.moves[1].Z==staging.Z-12)
+assert(sideways.moves[1].X==sideways.door.Position.X and sideways.moves[1].Z==sideways.door.Position.Z)
 -- While native transfer temporarily drops the character, remain game-owned.
 local absent=scenario();absent.tick(0)
 absent.env.LocalPlayer.Character=nil;assert(absent.tick(11)==true)
@@ -210,7 +210,7 @@ assert(#timeout.moves<=8,'forward motion bounded to 96 studs')
 local drift=scenario();drift.tick(0);drift.root.Position=arena;drift.tick(1)
 drift.root.Position=arena+vec(5,0,0);drift.tick(2.5);drift.tick(3.5)
 assert(drift.rt.RouteBusy);assert(drift.tick(4.6)==false)
-print('EXTRA PASS: forward-only with sideways door, missing character, bounded HOLD, landing drift')
+print('EXTRA PASS: DEV forward portal targeting, missing character, bounded HOLD, landing drift')
 
 -- Regression: the waiting room can spawn outside the old fixed 180-stud sphere.
 local shifted=scenario()

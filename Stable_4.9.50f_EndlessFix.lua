@@ -2534,9 +2534,9 @@ do
             -- OPTIONAL; a streamed-out/CanTouch=false Root cannot freeze us.
             if now-guard.LastMove>=1.5 and guard.MoveAttempts<14 then
                 local destination=nil
-                -- Keep the spawn heading: the user requested forward walking.
-                -- The door scan only confirms contact; it never steers sideways.
-                if guard.Heading and guard.ForwardDistance<96 then
+                if door then
+                    destination=door.Position
+                elseif guard.Heading and guard.ForwardDistance<96 then
                     local step=math.min(12,96-guard.ForwardDistance)
                     guard.ForwardDistance=guard.ForwardDistance+step
                     destination=guard.Origin+guard.Heading*guard.ForwardDistance
@@ -2546,7 +2546,8 @@ do
                     guard.MoveAttempts=guard.MoveAttempts+1
                     hum:MoveTo(destination)
                     if guard.MoveAttempts==1 then
-                        log("WALK_FORWARD (native door contact; scanner not required)")
+                        log(door and ("WALK_NATIVE_DOOR "..tostring(door:GetFullName()))
+                            or "WALK_FORWARD_FALLBACK (scanner not required)")
                     end
                 end
             end
