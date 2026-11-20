@@ -211,3 +211,32 @@ local drift=scenario();drift.tick(0);drift.root.Position=arena;drift.tick(1)
 drift.root.Position=arena+vec(5,0,0);drift.tick(2.5);drift.tick(3.5)
 assert(drift.rt.RouteBusy);assert(drift.tick(4.6)==false)
 print('EXTRA PASS: forward-only with sideways door, missing character, bounded HOLD, landing drift')
+
+-- Regression: the waiting room can spawn outside the old fixed 180-stud sphere.
+local shifted=scenario()
+shifted.root.Position=staging+vec(1000,0,1000)
+shifted.door.Position=shifted.root.Position+vec(0,0,-24)
+assert(shifted.rt.EndlessSafeEntryActive(),'nearby native door must guard a shifted spawn')
+assert(shifted.tick(0) and shifted.rt.RouteBusy)
+shifted.tick(9.9);assert(#shifted.moves==0)
+shifted.tick(10);assert(#shifted.moves==1)
+assert(shifted.rt.EndlessSafeEntryPhase=='APPROACH','shifted spawn is not an arena landing')
+shifted.root.Position=arena;shifted.tick(11);shifted.tick(13.1)
+assert(not shifted.rt.RouteBusy)
+print('SHIFTED SPAWN PASS: local RoundDoor detection and dynamic origin')
+
+-- A fresh Lobby entry is guarded even before the RoundDoor streams in.
+local fresh=scenario();local lobby=true
+fresh.env.GamePlaceUtil.IsMain=function()return lobby end
+fresh.tick(0);lobby=false
+fresh.root.Position=staging+vec(2000,0,2000);fresh.setDoor(false)
+assert(fresh.rt.EndlessPatrolBlocked(),'no search circles before verified entry')
+assert(fresh.rt.EndlessSafeEntryActive());fresh.tick(5);fresh.tick(14.99)
+assert(#fresh.moves==0);fresh.tick(15);assert(#fresh.moves==1)
+local origin=fresh.root.Position
+fresh.root.Position=origin+vec(5,0,-5);fresh.tick(17)
+assert(fresh.moves[2].X==origin.X and fresh.moves[2].Z==origin.Z-24,'forward goals stay on original line despite sideways drift')
+assert(not shifted.rt.EndlessPatrolBlocked(),'patrol lock ends only after confirmed landing')
+local alreadyArena=scenario();alreadyArena.root.Position=arena;alreadyArena.setDoor(false)
+assert(not alreadyArena.rt.EndlessSafeEntryActive(),'do not force forward walk on reinjection in arena without entry evidence')
+print('ENTRY OWNERSHIP PASS: shifted Lobby entry, streaming gap, 10s boundary, drift-resistant line, arena reinjection')
