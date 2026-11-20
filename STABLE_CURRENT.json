@@ -1,0 +1,15 @@
+{
+  "version": "5.0",
+  "channel": "Stable",
+  "approved_source_repository": "shockler/IronSoul-Modular",
+  "approved_source_sha": "23c7eb45c5bd7f66db6d57973d74333fb6ad82ef",
+  "baseline_source_sha": "df43eaa9d3a18b4d3f563a6cb76241f11909522a",
+  "source_tree_sha": "e30d02ae7f70cd76f6f8097ea8757ba044aef4f9",
+  "verified_dev_build_run": 44825675559,
+  "verified_stable_run": 44828606798,
+  "gist_revision": "245aa08b8ce9f4465bfbf045d9efec72009bbc46",
+  "sha256": "5b477fbceac5edc9d1e12dbfa01518a76b59af74b8f0000b17ef457711c439fe",
+  "pinned_url": "https://gist.githubusercontent.com/shockler/e5c91e83aa50c3ae26817319c25d153d/raw/245aa08b8ce9f4465bfbf045d9efec72009bbc46/IronSoul_DEV.lua",
+  "previous_stable_url": "https://raw.githubusercontent.com/shockler/IronSoul-Release/0da96b09e30b111f90d3bebb090411cad3ad5a14/Stable_4.9.50f_EndlessFix.lua",
+  "notes": "User verified exact pre-PR132 DEV in Roblox; future Dev updates do not change Stable. Legacy Stable_4.9.50f_EndlessFix.lua remains a readable rollback file."
+}
