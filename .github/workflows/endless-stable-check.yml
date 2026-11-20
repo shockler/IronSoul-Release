@@ -1,0 +1,29 @@
+name: Endless Stable validation
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Lua behavioral tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.4
+          lua5.4 tests/endless_native_door_mock.lua
+          lua5.4 tests/endless_integration_mock.lua
+      - name: Compile complete source with official Luau 0.747
+        run: |
+          curl --fail --location --retry 3 https://github.com/luau-lang/luau/releases/download/0.747/luau-ubuntu.zip -o /tmp/luau.zip
+          unzip -q /tmp/luau.zip -d /tmp/luau
+          chmod +x /tmp/luau/luau-compile
+          /tmp/luau/luau-compile --null Stable_4.9.50f_EndlessFix.lua
+          if test -f IronSoul_Launcher_Stall_V5.lua; then /tmp/luau/luau-compile --null IronSoul_Launcher_Stall_V5.lua; fi
+      - name: Verify pinned Stable artifact
+        run: python3 tests/verify_stable.py
