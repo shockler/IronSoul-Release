@@ -92,7 +92,7 @@ if type(readfile) == "function" then
     end
 end
 local urls = {
-    Stable = "https://raw.githubusercontent.com/shockler/IronSoul-Release/e8318772806c43292602c2c0097a02cf6fa9cf5a/Stable_4.9.50f_EndlessFix.lua",
+    Stable = "https://raw.githubusercontent.com/shockler/IronSoul-Release/054166e11c327e089a3b4654a1c23c94044c069b/Stable_4.9.50f_EndlessFix.lua",
     Dev = "https://gist.githubusercontent.com/shockler/e5c91e83aa50c3ae26817319c25d153d/raw/IronSoul_DEV.lua",
 }
 local gui = Instance.new("ScreenGui")

@@ -7,7 +7,7 @@
   "landing_stable_seconds": 2,
   "live_tested": false,
   "notes": "Spawn-independent entry detection; patrol blocked before confirmed entry; fixed forward line after 10s wait. Dev/Stall unchanged.",
-  "source_commit": "e8318772806c43292602c2c0097a02cf6fa9cf5a",
-  "pinned_url": "https://raw.githubusercontent.com/shockler/IronSoul-Release/e8318772806c43292602c2c0097a02cf6fa9cf5a/Stable_4.9.50f_EndlessFix.lua",
-  "previous_stable_url": "https://gist.githubusercontent.com/shockler/9db8a6d1e08d331b6aff0969af8616b8/raw/17691e3a8aa5ec95639c02cc6d7adfd8f40b631d/gistfile1.txt"
+  "source_commit": "054166e11c327e089a3b4654a1c23c94044c069b",
+  "pinned_url": "https://raw.githubusercontent.com/shockler/IronSoul-Release/054166e11c327e089a3b4654a1c23c94044c069b/Stable_4.9.50f_EndlessFix.lua",
+  "previous_stable_url": "https://raw.githubusercontent.com/shockler/IronSoul-Release/e8318772806c43292602c2c0097a02cf6fa9cf5a/Stable_4.9.50f_EndlessFix.lua"
 }
