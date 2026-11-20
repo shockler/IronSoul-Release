@@ -2327,7 +2327,8 @@ do
     local guard={Phase=nil,Token=nil,OwnsRouteBusy=false,Character=nil,Cfg=nil,
         CompletedCharacter=nil,CompletedCfg=nil,Started=0,
         LastMove=0,MoveAttempts=0,LastWarn=0,StableAt=nil,LastSafe=nil,
-        Heading=nil,ForwardDistance=0,LandedAt=nil,MissingCfgAt=nil}
+        Heading=nil,Origin=nil,FromLobby=GamePlaceUtil:IsMain(),
+        ForwardDistance=0,LandedAt=nil,MissingCfgAt=nil}
     local function log(message)
         if Runtime.Log then Runtime.Log("ENDLESS_SAFE_ENTRY "..message) end
     end
@@ -2355,9 +2356,28 @@ do
         local hum=char and char:FindFirstChildOfClass("Humanoid")
         return cfg,char,root,hum
     end
+    local function waitingRoom(root)
+        if guard.FromLobby or (root.Position-stage).Magnitude<=180 then return true end
+        -- Reinjection/shifted spawn: use the live local door, not a map coordinate.
+        local folder=Workspace:FindFirstChild("RoundDoor")
+        if not folder then return false end
+        for _,node in ipairs(folder:GetDescendants()) do
+            if node.Name=="Root" and node:IsA("BasePart") and node.Parent
+                and node.Parent.Name=="Portal" then
+                local offset=node.Position-root.Position
+                local horizontal=Vector3.new(offset.X,0,offset.Z)
+                if horizontal.Magnitude<=150 and math.abs(offset.Y)<=60 then return true end
+            end
+        end
+        return false
+    end
+    function Runtime.EndlessPatrolBlocked()
+        local cfg,char=live()
+        return cfg~=nil and not (guard.CompletedCfg==cfg and guard.CompletedCharacter==char)
+    end
     function Runtime.EndlessSafeEntryActive()
         if guard.Phase and Runtime.Alive and not GamePlaceUtil:IsMain()
-            and combatFarmEnabled() and guard.Character==LocalPlayer.Character then
+            and combatFarmEnabled() and (not LocalPlayer.Character or guard.Character==LocalPlayer.Character) then
             -- The game may temporarily remove or replace GameRoundCfg during
             -- RoundDoor teleport; retaining this guard prevents a race.
             return true
@@ -2366,9 +2386,7 @@ do
         if not cfg or not char or not root or not hum or hum.Health<=0
             or not combatFarmEnabled() then return false end
         if guard.CompletedCfg==cfg and guard.CompletedCharacter==char then return false end
-        -- This is an observed stage fingerprint, never a teleport destination.
-        -- Reinjecting inside the main arena therefore cannot arm the guard.
-        return (root.Position-stage).Magnitude<=180
+        return waitingRoom(root)
     end
     local function nearestForwardRoundDoor(root)
         local folder=Workspace:FindFirstChild("RoundDoor")
@@ -2407,6 +2425,14 @@ do
         return rayGround or grounded
     end
     function Runtime.EndlessSafeEntryTick()
+        if GamePlaceUtil:IsMain() then
+            guard.FromLobby=true
+            guard.CompletedCfg,guard.CompletedCharacter=nil,nil
+        else
+            local observed=ReplicatedStorage:FindFirstChild("GameRoundCfg")
+            local world=observed and observed:GetAttribute("WorldId")
+            if world and world~="Endless1" then guard.FromLobby=false end
+        end
         -- Only an explicit exit/stop/death may cancel the game-owned entry.
         -- Missing GameRoundCfg/character/root while changing maps is NOT
         -- proof that transfer finished; continue blocking other workers.
@@ -2448,7 +2474,7 @@ do
         end
         if not guard.Phase then
             if guard.CompletedCfg==cfg and guard.CompletedCharacter==char
-                or (root.Position-stage).Magnitude>180
+                or not waitingRoom(root)
                 or Runtime.Owner or Runtime.RouteBusy then return false end
             local token=Runtime.Acquire("ENDLESS_SAFE_ENTRY")
             if not token then return false end
@@ -2457,6 +2483,8 @@ do
             guard.OwnsRouteBusy=true
             guard.Cfg,guard.Character=cfg,char
             guard.Started=now
+            guard.Origin=root.Position
+            guard.FromLobby=false
             guard.LastMove,guard.MoveAttempts,guard.LastWarn=0,0,0
             guard.StableAt,guard.LastSafe=nil,nil
             guard.ForwardDistance,guard.LandedAt=0,nil
@@ -2478,7 +2506,7 @@ do
         end
         -- A real portal transition shifts the character thousands of studs.
         -- No movement commands are allowed once this displacement is seen.
-        if (root.Position-stage).Magnitude>500 then
+        if guard.Origin and (root.Position-guard.Origin).Magnitude>500 then
             if guard.Phase~="LANDING" then
                 guard.Phase="LANDING"
                 guard.StableAt,guard.LastSafe=nil,nil
@@ -2506,19 +2534,20 @@ do
             -- OPTIONAL; a streamed-out/CanTouch=false Root cannot freeze us.
             if now-guard.LastMove>=1.5 and guard.MoveAttempts<14 then
                 local destination=nil
-                -- Keep the spawn heading: the user requested forward walking.
-                -- The door scan only confirms contact; it never steers sideways.
-                if guard.Heading and guard.ForwardDistance<96 then
+                if door then
+                    destination=door.Position
+                elseif guard.Heading and guard.ForwardDistance<96 then
                     local step=math.min(12,96-guard.ForwardDistance)
                     guard.ForwardDistance=guard.ForwardDistance+step
-                    destination=root.Position+guard.Heading*step
+                    destination=guard.Origin+guard.Heading*guard.ForwardDistance
                 end
                 if destination then
                     guard.LastMove=now
                     guard.MoveAttempts=guard.MoveAttempts+1
                     hum:MoveTo(destination)
                     if guard.MoveAttempts==1 then
-                        log("WALK_FORWARD (native door contact; scanner not required)")
+                        log(door and ("WALK_NATIVE_DOOR "..tostring(door:GetFullName()))
+                            or "WALK_FORWARD_FALLBACK (scanner not required)")
                     end
                 end
             end
@@ -6968,6 +6997,10 @@ local function patrolDestinations()
 	return points, false
 end
 local function walkPatrol(char, root, hum)
+    if Runtime.EndlessPatrolBlocked and Runtime.EndlessPatrolBlocked() then
+        if patrol.Busy then stopPatrol() end
+        return
+    end
 	if Runtime.Owner or Runtime.RouteBusy or Runtime.RouteAwaitingSpawn or not Config.AutoPatrol or patrol.Busy or not patrol.Origin then return end
 	patrol.IdleSince = patrol.IdleSince or os.clock()
 	if os.clock() - patrol.IdleSince < 1.5 then return end
@@ -6994,6 +7027,7 @@ local function walkPatrol(char, root, hum)
 		local function active()
 			return Runtime.Alive and not Runtime.Owner and token == patrol.Token and combatFarmEnabled() and Config.AutoPatrol
 				and not isTransitioning() and not GamePlaceUtil:IsMain() and char.Parent and hum.Health > 0
+                and not (Runtime.EndlessPatrolBlocked and Runtime.EndlessPatrolBlocked())
 		end
 		local ok, err = pcall(function()
 			local path = PathfindingService:CreatePath({AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 5})

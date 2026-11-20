@@ -29,3 +29,13 @@ local watchdog=assert(s:find('local function watchdogTick()',1,true))
 assert(s:find('Runtime.EndlessSafeEntryActive',watchdog,true)<s:find('if stuckWatch.Pending then',watchdog,true),'handoff precedes pending lobby watchdog')
 assert(s:find('if Runtime.EndlessSafeEntryTick and Runtime.EndlessSafeEntryTick() then return end\n\t\t\tRuntime.ObserveRouteRun()',1,true),'guard precedes route tick')
 print('INTEGRATION PASS: transition gate, collision restore, manual/auto entry redirect, route/watchdog ordering')
+
+-- Execute the real patrol entry: it must return before pathfinding begins.
+a=assert(s:find('local function walkPatrol(char, root, hum)',1,true))
+b=assert(s:find('\naddSectionHeader("5.',a,true))
+local stops=0
+env.patrol={Busy=true};env.stopPatrol=function()stops=stops+1;env.patrol.Busy=false end
+rt.EndlessPatrolBlocked=function()return true end
+local walk=assert(load(s:sub(a,b-1)..'\nreturn walkPatrol','actual_patrol_gate','t',env))()
+walk(nil,nil,nil);assert(stops==1,'cancel previously active patrol before it can search')
+print('PATROL BLOCK PASS: actual walkPatrol never starts pathfinding before Endless entry confirmation')

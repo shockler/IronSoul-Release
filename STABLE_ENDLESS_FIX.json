@@ -1,13 +1,14 @@
 {
-  "version": "4.9.50f-endless-native-door",
+  "version": "4.9.50f-endless-native-door-r2",
   "source": "Stable_4.9.50f_EndlessFix.lua",
-  "sha256": "ceaa28fdaa8ddb3d87be0d0e7f9c2c5547625c7a6aac6fb9d9afb9225c6283c8",
+  "sha256": "24bac5c119341a0aa8327132fef5fa2be5acab81d19115ece65dcd59ebcb3d43",
   "input_sha256": "7e9dc3d5e8d3ce742e849d750970dab5b1116f74a936ef64a3c65fd55e56c0c5",
   "entry_wait_seconds": 10,
   "landing_stable_seconds": 2,
   "live_tested": false,
-  "notes": "Native RoundDoor transfer; no recorded-coordinate Endless entry. Dev and Stall unchanged.",
-  "source_commit": "e8318772806c43292602c2c0097a02cf6fa9cf5a",
-  "pinned_url": "https://raw.githubusercontent.com/shockler/IronSoul-Release/e8318772806c43292602c2c0097a02cf6fa9cf5a/Stable_4.9.50f_EndlessFix.lua",
-  "previous_stable_url": "https://gist.githubusercontent.com/shockler/9db8a6d1e08d331b6aff0969af8616b8/raw/17691e3a8aa5ec95639c02cc6d7adfd8f40b631d/gistfile1.txt"
+  "notes": "DEV native forward RoundDoor selection and 10s wait; spawn-independent guard and patrol exclusion; fixed-origin fallback. Dev/Stall unchanged.",
+  "source_commit": "0da96b09e30b111f90d3bebb090411cad3ad5a14",
+  "pinned_url": "https://raw.githubusercontent.com/shockler/IronSoul-Release/0da96b09e30b111f90d3bebb090411cad3ad5a14/Stable_4.9.50f_EndlessFix.lua",
+  "previous_stable_url": "https://raw.githubusercontent.com/shockler/IronSoul-Release/e8318772806c43292602c2c0097a02cf6fa9cf5a/Stable_4.9.50f_EndlessFix.lua",
+  "dev_reference_commit": "5e7b6a8f491fc17eb5473c720f8e719164cdc3cf"
 }
