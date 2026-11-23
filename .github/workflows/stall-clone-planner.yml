@@ -1,0 +1,34 @@
+name: Stall Clone exact shard planner (NO PUBLISH)
+on:
+  push:
+    branches: [feat/stall-clone-shard-planner-20261123]
+  pull_request:
+    branches: [main]
+    paths:
+      - Stall.lua
+      - tests/clone_shard_planner.lua
+      - .github/workflows/stall-clone-planner.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  clone-math:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.4
+      - name: Syntax check actual standalone and test
+        run: |
+          luac5.4 -p Stall.lua
+          luac5.4 -p tests/clone_shard_planner.lua
+      - name: Verify 4 clone targets, minimum ore, exact stack pricing and safety
+        run: lua5.4 tests/clone_shard_planner.lua
+      - name: Do not publish from feature branch
+        run: echo 'Stall.lua is loaded from release main only after merge.'
