@@ -1795,7 +1795,9 @@ end
 -- CLONE_SHARD_TAB_BEGIN: four independent clone targets, one chosen owned Ore.
 -- No client-side purchases or automatic shard transfers. Seller manually lists
 -- exact-price stacks; a buyer still needs to purchase them in the game.
-local clone=Instance.new("Frame",panel)
+local clone
+;(function()
+clone=Instance.new("Frame",panel)
 clone.Name="CloneShardPanel";clone.BackgroundColor3=Color.BG
 clone.BorderSizePixel=0;clone.Visible=false;clone.ZIndex=25
 clone.Position=UDim2.new(.008,0,.076,0);clone.Size=UDim2.new(.984,0,.906,0)
@@ -1838,6 +1840,7 @@ local cloneSelected=nil
 local clonePending=nil
 local cloneSent={} -- one-shot sent signatures per session: never auto-relist.
 local cloneInputs,clonePreview={},{}
+local cloneAllButton=nil
 local cloneSelectedLabel=cloneLabel(clone,"Chưa chọn Ore",.442,.155,.537,.063,12,true,true)
 cloneLabel(clone,"CLONE",.444,.236,.105,.04,11,true)
 cloneLabel(clone,"SHARDS",.559,.236,.165,.04,11,true)
@@ -1862,7 +1865,7 @@ end
 local function cloneCalculate()
     local bag,bagError=oreBag()
     local stock=bag and (tonumber(bag[cloneSelected]) or 0) or 0
-    local minimum,maximum=cloneSelected and cloneOreRange(cloneSelected) or nil,nil
+    local minimum,maximum=nil,nil
     if cloneSelected then
         minimum,maximum=cloneOreRange(cloneSelected)
     end
@@ -1870,7 +1873,7 @@ local function cloneCalculate()
         .." | Min: "..tostring(minimum or "?")
         .." / Max: "..tostring(maximum or "?")) or "Chưa chọn Ore"
     cloneSelectedLabel.Text=info
-    local plans={},totalQty,totalPrice,validCount=0,0,0
+    local plans,totalQty,totalPrice,validCount={},0,0,0
     local failure=nil
     for i=1,4 do
         local raw=cloneInputs[i].Text
@@ -1981,6 +1984,7 @@ end
 for i=1,4 do
     state.Conn[#state.Conn+1]=cloneInputs[i]:GetPropertyChangedSignal("Text"):Connect(function()
         clonePending=nil
+        if cloneAllButton then cloneAllButton.Text="TREO CẢ 4" end
         if state.Alive then cloneCalculate() end
     end)
 end
@@ -2017,6 +2021,7 @@ local function cloneRefreshInventory()
         cloneButton(row,title,.015,.10,.97,.80,function()
             cloneSelected=id
             clonePending=nil
+            if cloneAllButton then cloneAllButton.Text="TREO CẢ 4" end
             cloneCalculate()
             cloneMsg("Đã chọn "..id..". Nhập các khoản Shards rồi bấm TREO.")
         end,id==cloneSelected and Color.Green or Color.Blue)
@@ -2027,6 +2032,7 @@ end
 cloneButton(clone,"QUÉT LẠI TÚI",.019,.827,.192,.066,cloneRefreshInventory)
 cloneButton(clone,"TÍNH LẠI",.440,.825,.160,.066,function()
     clonePending=nil
+    if cloneAllButton then cloneAllButton.Text="TREO CẢ 4" end
     local _,err,n=cloneCalculate()
     cloneMsg(err or ("Đã tính "..n.." khoản theo giá Max/Ore, ưu tiên ít viên nhất."))
 end)
@@ -2035,7 +2041,6 @@ cloneButton(clone,"DỪNG",.221,.827,.145,.066,function()
     clonePending=nil
     cloneMsg("Yêu cầu dừng sau lệnh đang gửi.")
 end,Color.Red)
-local cloneAllButton
 cloneAllButton=cloneButton(clone,"TREO CẢ 4",.616,.825,.359,.066,function()
     if saleBusy then cloneMsg("Đang gửi lệnh, hãy chờ.");return end
     local plans,err,count=cloneCalculate()
@@ -2068,7 +2073,6 @@ cloneAllButton=cloneButton(clone,"TREO CẢ 4",.616,.825,.359,.066,function()
 end,Color.Green)
 
 -- Clone and Sell are independent panels, but share the same saleBusy lock.
-cloneButton(clone,"BÁN ORE / SCROLL",.018,.012,.0,.0,function()end)
 local cloneOpenButton=button(panel,"CLONE",.579,.017,.136,.055,function()
     clone.Visible=not clone.Visible
     if clone.Visible then
@@ -2076,6 +2080,7 @@ local cloneOpenButton=button(panel,"CLONE",.579,.017,.136,.055,function()
         cloneRefreshInventory()
     end
 end,Color.Green)
+end)()
 -- CLONE_SHARD_TAB_END
 
 sellButton(sale,"QUÉT ORE",.018,.072,.18,.05,refreshSale)
