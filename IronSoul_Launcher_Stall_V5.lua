@@ -235,9 +235,10 @@ function api.ready(channel)
     if channel=="Dev" then
         local buyer=env.IronSoulTradeBuyerF7
         if type(buyer)=="table" and buyer.Alive==true
-            and type(buyer.Stop)=="function"
-            and buyer.Panel and buyer.Panel.Parent~=nil
-            and buyer.Panel:IsA("GuiObject") then
+            and buyer.IsTradeBuyer==true
+            and type(buyer.Stop)=="function" then
+            -- DEV Trade is deliberately hotkey-only; there is no F7
+            -- floating panel. The Stall channel owns the in-panel F7 button.
             return true
         end
     end
