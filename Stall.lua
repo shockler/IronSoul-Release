@@ -445,10 +445,128 @@ local function applyFX(obj)
         change(perf.Changes,obj,"Enabled",false)
     end
 end
+-- STALL_MARKET_LITE_V1_BEGIN
+-- Visual-only Market reduction. Hide static shop/building/booth decoration
+-- without Destroy(), reparent, geometry/collision changes, or server remotes.
+-- Floors, interaction anchors, booth signage, players and NPCs remain intact.
+-- Integrated into existing LOW FX toggle; OFF/Stop restores exact values.
+local setMarketLite=(function()
+    local lite={Enabled=false,Epoch=0,Changed=setmetatable({},{__mode="k"}),
+        Connections={},Hidden=0,Scanned=0}
+    state.MarketLite=lite
+    local safeNames={
+        "ground","floor","baseplate","platform","road","path","walk",
+        "bridge","spawn","stair","step","ramp","foundation","landing",
+        "checkpoint","teleport","interact","trigger","hitbox","portal",
+        "boothbase","stallbase","boothpoint","stallpoint","boothslot",
+        "stallslot","collision","safezone","zonebase","water",
+    }
+    local function markedSafe(name)
+        local lower=tostring(name or ""):lower()
+        for _,word in ipairs(safeNames) do
+            if lower:find(word,1,true) then return true end
+        end
+        return false
+    end
+    local function hasInteractUI(part)
+        -- Never hide a part carrying a player prompt or a seller/price board.
+        for _,child in ipairs(part:GetDescendants()) do
+            if child:IsA("ProximityPrompt") or child:IsA("ClickDetector")
+                or child:IsA("TouchTransmitter") or child:IsA("SurfaceGui")
+                or child:IsA("BillboardGui") then return true end
+        end
+        return false
+    end
+    local function isProtected(part)
+        if not part:IsA("BasePart") or not part.Anchored then return true end
+        if part==Workspace.Terrain then return true end
+        if markedSafe(part.Name) or hasInteractUI(part) then return true end
+        -- Flat, upward-facing structural plates may be walkable even if named Part.
+        -- Leave these visible rather than hiding ground or invisible bridges.
+        local size,cf=part.Size,part.CFrame
+        if size and cf and cf.UpVector and cf.UpVector.Y>=0.72
+            and size.Y>0 and size.X>=size.Y*3 and size.Z>=size.Y*3 then
+            return true
+        end
+        local ancestor=part.Parent
+        for _=1,16 do
+            if not ancestor or ancestor==Workspace then break end
+            if ancestor:IsA("Model") then
+                -- Keep avatars, NPCs and pets, even if their limbs are anchored.
+                if ancestor:FindFirstChildOfClass("Humanoid") then return true end
+                local n=ancestor.Name:lower()
+                if n:find("npc",1,true) or n:find("enemy",1,true)
+                    or n:find("boss",1,true) or n:find("pet",1,true) then
+                    return true
+                end
+            end
+            ancestor=ancestor.Parent
+        end
+        return false
+    end
+    local function hidePart(part)
+        if not lite.Enabled or not part or not part:IsA("BasePart") then return end
+        lite.Scanned=lite.Scanned+1
+        if isProtected(part) then return end
+        local before=lite.Changed[part]
+        change(lite.Changed,part,"LocalTransparencyModifier",1)
+        if not before and lite.Changed[part] then lite.Hidden=lite.Hidden+1 end
+    end
+    local function restoreMarket()
+        lite.Enabled=false
+        lite.Epoch=lite.Epoch+1
+        disconnect(lite.Connections)
+        restore(lite.Changed)
+        lite.Hidden=0
+        lite.Scanned=0
+    end
+    local function setEnabled(on)
+        on=on==true and state.Alive and marketPlace()
+        if not on then
+            restoreMarket()
+            return
+        end
+        if lite.Enabled then return end
+        lite.Enabled=true
+        lite.Epoch=lite.Epoch+1
+        local epoch=lite.Epoch
+        lite.Hidden=0;lite.Scanned=0
+        lite.Connections[#lite.Connections+1]=Workspace.DescendantAdded:Connect(function(obj)
+            if not lite.Enabled or not state.Alive or lite.Epoch~=epoch then return end
+            if obj:IsA("BasePart") then
+                hidePart(obj)
+            elseif obj:IsA("Model") then
+                -- A fully parented building can arrive with children preloaded.
+                task.defer(function()
+                    if not lite.Enabled or not state.Alive or lite.Epoch~=epoch then return end
+                    for _,desc in ipairs(obj:GetDescendants()) do hidePart(desc) end
+                end)
+            end
+        end)
+        task.spawn(function()
+            local descendants=Workspace:GetDescendants()
+            for i,obj in ipairs(descendants) do
+                if not state.Alive or not lite.Enabled or lite.Epoch~=epoch then return end
+                hidePart(obj)
+                if i%180==0 then task.wait() end
+            end
+            if state.Alive and lite.Enabled and lite.Epoch==epoch then
+                print("[STALL_MARKET_LITE] ON; hidden_static_parts="..lite.Hidden
+                    .." scanned="..lite.Scanned
+                    .."; floor/prompts/booth signs/characters kept; visual only")
+            end
+        end)
+    end
+    return setEnabled
+end)()
+-- STALL_MARKET_LITE_V1_END
+
 local function setLowFX(enabled)
     if perf.LowFX==enabled then return end
     perf.LowFX=enabled
     disconnect(perf.Conns)
+    -- Market Lite follows the SAME Low FX button; no separate toggle.
+    setMarketLite(enabled)
     if not enabled then restore(perf.Changes);return end
     change(perf.Changes,Lighting,"GlobalShadows",false)
     perf.Conns[#perf.Conns+1]=Workspace.DescendantAdded:Connect(applyFX)
@@ -1258,7 +1376,7 @@ local lowFxBtn
 lowFxBtn=button(panel,"LOW FX: ON",.705,.093,.138,.050,function()
     setLowFX(not perf.LowFX)
     lowFxBtn.Text="LOW FX: "..(perf.LowFX and "ON" or "OFF")
-    say("LOW FX "..(perf.LowFX and "ON" or "OFF").."; quầy, chữ giá và UI vẫn hiển thị.")
+    say("LOW FX + MARKET LITE "..(perf.LowFX and "ON" or "OFF").."; giữ nền, điểm tương tác, bảng giá, UI.")
 end,Color.Green)
 local hidePlayersBtn
 hidePlayersBtn=button(panel,"ẨN NGƯỜI: OFF",.849,.093,.138,.050,function()
