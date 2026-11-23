@@ -51,6 +51,14 @@ local state = {
     Sort = "QUALITY", LastMessage = "", RefreshCount = 0,
 }
 env.IronSoulMarketScanner = state
+-- Unified Stall mode owns the Market hotkeys. Stop the previous DEV
+-- overlay/buyer if this standalone is launched directly (outside launcher).
+do
+    local priorBuyer=env.IronSoulTradeBuyerF7
+    if priorBuyer and type(priorBuyer.Stop)=="function" then
+        pcall(priorBuyer.Stop)
+    end
+end
 -- Scroll-only: never display or purchase Ore, Potion, Crystals etc.
 local ScrollDefinitions,ScrollUtil,TranslateUtil,WindowUtil
 pcall(function() ScrollDefinitions=require(RS.Configs.ResScrolls) end)
@@ -933,8 +941,8 @@ local search=field(panel,"Tên Scroll / Skill / chỉ số / người bán",.014
 local minPrice=field(panel,"Min $",.392,.092,.14,.050,"")
 local maxPrice=field(panel,"Max $",.541,.092,.14,.050,"")
 label(panel,"STALL MARKET v5 | SCAN / MUA / BÁN ORE + SCROLL",.014,.018,.72,.058,15,true)
-button(panel,"H ẨN",.730,.017,.126,.055,function()panel.Visible=false end)
-button(panel,"X",.864,.017,.122,.055,function() state.Stop() end,Color.Red)
+button(panel,"H ẨN",.825,.017,.081,.055,function()panel.Visible=false end)
+button(panel,"X",.915,.017,.070,.055,function() state.Stop() end,Color.Red)
 local list=Instance.new("ScrollingFrame",panel)
 list.Name="ScrollListings";list.Position=UDim2.new(.012,0,.293,0)
 list.Size=UDim2.new(.975,0,.598,0)
@@ -2218,6 +2226,182 @@ button(panel,"BÁN HÀNG",.440,.017,.129,.055,function()
     if sale.Visible and #saleRows:GetChildren()<=1 then refreshSale() end
 end,Color.Green)
 
+-- STALL-F7-UNIFIED-001 START: single button + F7 in the existing Stall UI.
+-- Uses the shared BoothRE/BoothShows/StallView parser; no floating DEV overlay,
+-- no automatic purchases, and no interaction with Dungeon AIO.
+;(function()
+    local sellerName="vnbshockler"
+    local lastSent={} -- one shot per listing UUID and price, never duplicate.
+    local f7Busy=false
+    local function exactBalance()
+        local framework=require(RS:WaitForChild("Framework",6))
+        local dataUtil=framework and framework.Modules
+            and framework.Modules.DataUtil
+        if type(dataUtil)~="table" or type(dataUtil.GetValue)~="function" then
+            return nil,"DataUtil chưa sẵn sàng"
+        end
+        local balances={}
+        local function add(value)
+            local n=tonumber(value)
+            if n and n==n and n>=0 and n<=1000000000
+                and n%1==0 then
+                balances[#balances+1]=n
+            end
+        end
+        local keys={"OriginShard","OriginShards"}
+        local parents={"Currencies","Currency","Wallet","Money","PlayerData"}
+        for _,key in ipairs(keys) do
+            local ok,value=pcall(function()return dataUtil:GetValue(LocalPlayer,{key})end)
+            if ok then add(value) end
+            for _,parent in ipairs(parents) do
+                local good,item=pcall(function()
+                    return dataUtil:GetValue(LocalPlayer,{parent,key})
+                end)
+                if good then add(item) end
+            end
+        end
+        local ok,root=pcall(function()return dataUtil:GetValue(LocalPlayer,{})end)
+        if ok and type(root)=="table" then
+            local visited={}
+            local function walk(value,depth)
+                if depth>5 or type(value)~="table" or visited[value] then return end
+                visited[value]=true
+                for k,v in pairs(value) do
+                    if type(k)=="string" then
+                        local norm=k:lower():gsub("[^%w]","")
+                        if norm=="originshard" or norm=="originshards" then
+                            add(v)
+                            if type(v)=="table" then
+                                add(v.Amount);add(v.Value);add(v.Count)
+                            end
+                        end
+                    end
+                    if type(v)=="table" then walk(v,depth+1) end
+                end
+            end
+            walk(root,0)
+        end
+        if #balances==0 then return nil,"Không đọc được Origin Shard" end
+        local b=balances[1]
+        for _,v in ipairs(balances) do
+            if v~=b then return nil,"Origin Shard không nhất quán" end
+        end
+        return b
+    end
+    local function waitFor(check,secs)
+        local deadline=os.clock()+secs
+        while state.Alive and not state.Cancel and os.clock()<deadline do
+            local value=check()
+            if value then return value end
+            task.wait(.1)
+        end
+        return nil
+    end
+    local function buy()
+        if f7Busy or not state.Alive then return end
+        if not marketPlace() then say("F7: phải ở Trade Server");return end
+        if state.Busy or state.PurchaseBusy or saleBusy then
+            say("F7: đang scan/mua/bán, không gửi lệnh");return
+        end
+        f7Busy=true
+        state.Busy=true
+        state.Cancel=false
+        task.spawn(function()
+            local ok,err=xpcall(function()
+                local ownerId=Players:GetUserIdFromNameAsync(sellerName)
+                assert(type(ownerId)=="number" and ownerId>0,
+                    "Không xác thực được UserId "..sellerName)
+                assert(ownerId~=LocalPlayer.UserId,"Không mua hàng của chính mình")
+                local balance,why=exactBalance()
+                assert(balance and balance>0,why or "Origin Shard bằng 0")
+                say("F7: tìm Stall "..sellerName.." | Shards "..balance)
+                local before=state.RefreshCount
+                local sent,reason=pcall(function()
+                    BoothRE:FireServer("RequestBoothShows")
+                end)
+                assert(sent,"Không quét được BoothShows: "..tostring(reason))
+                assert(waitFor(function()
+                    return state.RefreshCount>before and state.SnapshotReceived
+                end,8),"BoothShows timeout; không mua")
+                local chosenSlot=nil
+                for s,data in pairs(state.Stalls) do
+                    if positiveUserId(data)==ownerId then
+                        assert(not chosenSlot,"Có nhiều Stall cùng chủ, không tự chọn")
+                        chosenSlot=s
+                    end
+                end
+                assert(chosenSlot,"Không thấy quầy của "..sellerName)
+                state.ResponseSlot=nil
+                state.Full[chosenSlot]=nil
+                state.FullAt[chosenSlot]=nil
+                local mark=os.clock()
+                say("F7: quầy #"..chosenSlot.."; xác minh listing Ore")
+                local sentDetail,whyDetail=pcall(function()
+                    BoothRE:FireServer("InteractStall",chosenSlot)
+                end)
+                assert(sentDetail,"StallView lỗi: "..tostring(whyDetail))
+                assert(waitFor(function()
+                    return state.ResponseSlot==chosenSlot
+                        and (state.FullAt[chosenSlot] or 0)>=mark
+                        and state.Full[chosenSlot]
+                end,8),"StallView timeout; không mua")
+                local detail=state.Full[chosenSlot]
+                assert(positiveUserId(detail)==ownerId,
+                    "Không xác minh được chủ quầy trong StallView")
+                assert(type(detail.Items)=="table",
+                    "StallView không có Items hợp lệ")
+                local matches={}
+                for _,row in pairs(detail.Items) do
+                    if type(row)=="table" then
+                        local typ=str(row,"ItemType","Type","Category")
+                        local itemId=str(row,"ItemID","ItemId","ItemIDStr","ItemName")
+                        local price=number(row,"TotalPrice","ListingPrice",
+                            "Price","SellPrice")
+                        if typ=="Ore" and itemId and price==balance then
+                            local id=getListingId(row,itemId)
+                            assert(type(id)=="string" and #id>0 and #id<=128,
+                                "Ore khớp giá nhưng thiếu ListingID")
+                            matches[#matches+1]={Id=id,Item=itemId,Price=price}
+                        end
+                    end
+                end
+                assert(#matches==1,#matches==0 and
+                    "Không có Ore đúng "..balance.." Shards"
+                    or "Nhiều Ore khớp giá; không mua nhầm")
+                local listing=matches[1]
+                local confirmed,whyConfirm=exactBalance()
+                assert(confirmed==balance,
+                    whyConfirm or "Số dư Origin Shard đã thay đổi")
+                -- The native listing is identified by ownerUserId and UUID,
+                -- never by item name alone. Do not retry the same request.
+                local fingerprint=table.concat({ownerId,chosenSlot,
+                    listing.Id,listing.Item,listing.Price},"|")
+                assert(not lastSent[fingerprint],
+                    "Đã gửi mua listing này trong phiên; không mua trùng")
+                lastSent[fingerprint]=true
+                local fired,whyFire=pcall(function()
+                    BoothRE:FireServer("Purchase",ownerId,listing.Id)
+                end)
+                assert(fired,"Purchase FireServer lỗi: "..tostring(whyFire))
+                state.PurchasesSent=state.PurchasesSent+1
+                state.Full[chosenSlot]=nil
+                state.FullAt[chosenSlot]=nil
+                say("F7: đã GỬI mua "..listing.Item.." của "..sellerName..
+                    " giá "..balance.." Shards. Server chưa xác nhận giao dịch.")
+            end,debug.traceback)
+            f7Busy=false
+            state.Busy=false
+            state.Dirty=true
+            if not ok and state.Alive then
+                say("F7 KHÔNG MUA: "..tostring(err):sub(1,220))
+            end
+        end)
+    end
+    state.F7BuyExact=buy
+    button(panel,"F7 MUA",.719,.017,.101,.055,buy,Color.Green)
+end)()
+-- STALL-F7-UNIFIED-001 END
+
 -- LowFX defaults ON while this standalone is active. This is reversible
 -- when it is stopped or replaced by another scan version.
 setLowFX(true)
@@ -2226,9 +2410,61 @@ for _,item in ipairs({search,minPrice,maxPrice}) do
         state.Page=1;state.Dirty=true
     end)
 end
+-- STALL-B-LOBBY-001: manual B request, only in Market, never interrupt a sale.
+-- Reuse exactly the WorldUtil TeleportWorld Lobby remote from AIO.
+local lastStallBAt=-1000
+local function stallBackLobby()
+    if not state.Alive then return false end
+    if not marketPlace() then say("B LOBBY chỉ dùng trong Market Place.");return false end
+    if state.Busy or state.PurchaseBusy or saleBusy then
+        say("B LOBBY: đang quét/mua/bán; hoàn tất hoặc dừng tác vụ rồi thử lại.")
+        return false
+    end
+    local now=os.clock()
+    if now-lastStallBAt<4 then
+        say("B LOBBY: đã gửi gần đây; đợi 4 giây để tránh spam.")
+        return false
+    end
+    local fw=RS:FindFirstChild("Framework")
+    local gp=fw and fw:FindFirstChild("Gameplay")
+    local wp=gp and gp:FindFirstChild("WorldPlace")
+    local util=wp and wp:FindFirstChild("WorldUtil")
+    local remote=util and util:FindFirstChild("RemoteEvent")
+    if not remote and fw then
+        -- Fallback to the Framework module API used by Modular AIO.
+        local ok,module=pcall(require,fw)
+        if ok and type(module)=="table" and type(module.Modules)=="table" then
+            local worldUtil=module.Modules.WorldUtil
+            remote=worldUtil and worldUtil.RemoteEvent
+        end
+    end
+    if not remote or not remote:IsA("RemoteEvent") then
+        say("B LOBBY: chưa tìm thấy WorldUtil.RemoteEvent; không gửi lệnh.")
+        return false
+    end
+    lastStallBAt=now
+    local ok,err=pcall(function()
+        remote:FireServer("TeleportWorld","Lobby")
+    end)
+    if not ok then
+        say("B LOBBY gửi lỗi: "..tostring(err))
+        return false
+    end
+    state.PendingPurchase=nil -- no pending second-step purchase after leaving
+    say("B LOBBY: đã gửi TeleportWorld Lobby. Chờ game xác nhận chuyển map.")
+    print("[STALL_B_LOBBY] SENT; server transition not verified")
+    return true
+end
+state.ReturnLobby=stallBackLobby
+-- STALL-B-LOBBY-001 END
 state.Conn[#state.Conn+1]=Input.InputBegan:Connect(function(key,handled)
-    if not handled and state.Alive and key.KeyCode==Enum.KeyCode.H then
+    if not state.Alive or handled or Input:GetFocusedTextBox() then return end
+    if key.KeyCode==Enum.KeyCode.H then
         panel.Visible=not panel.Visible
+    elseif key.KeyCode==Enum.KeyCode.B then
+        stallBackLobby()
+    elseif key.KeyCode==Enum.KeyCode.F7 then
+        if state.F7BuyExact then state.F7BuyExact() end
     end
 end)
 function state.Stop()

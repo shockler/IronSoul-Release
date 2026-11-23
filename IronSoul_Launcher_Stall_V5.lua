@@ -182,6 +182,15 @@ function api.stop()
         runtime.Stop()
         if runtime.Alive ~= false then error("AIO runtime remains alive") end
     end
+    -- DEV in Market runs the lightweight F7 buyer, not IronSoulMainRuntime.
+    -- Stop it explicitly when switching channel/back; hiding the panel alone
+    -- does not stop the F7 hotkey or its BoothRE listener.
+    local f7Buyer=env.IronSoulTradeBuyerF7
+    if f7Buyer and f7Buyer.Alive~=false then
+        if type(f7Buyer.Stop)~="function" then error("Trade F7 has no Stop hook") end
+        f7Buyer.Stop()
+        if f7Buyer.Alive~=false then error("Trade F7 runtime remains alive") end
+    end
     local trade = env.IronSoulMarketScanner
     local stopError
     if trade then
@@ -219,6 +228,19 @@ function api.ready(channel)
             error("Stall v5 ScreenGui IronSoulScrollMarketScannerV5 is missing")
         end
         return true
+    end
+    -- DEV Trade world has its own early return before Dungeon bootstrap.
+    -- It is ready when its verified F7 runtime + attached panel exist.
+    -- Do not mistake this valid Trade startup for a failed AIO launch.
+    if channel=="Dev" then
+        local buyer=env.IronSoulTradeBuyerF7
+        if type(buyer)=="table" and buyer.Alive==true
+            and buyer.IsTradeBuyer==true
+            and type(buyer.Stop)=="function" then
+            -- DEV Trade is deliberately hotkey-only; there is no F7
+            -- floating panel. The Stall channel owns the in-panel F7 button.
+            return true
+        end
     end
     local r = env.IronSoulMainRuntime
     return r and r.Alive == true and r.Gui and r.Gui.Parent ~= nil
