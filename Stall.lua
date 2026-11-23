@@ -484,7 +484,10 @@ local setMarketLite=(function()
         -- Flat, upward-facing structural plates may be walkable even if named Part.
         -- Leave these visible rather than hiding ground or invisible bridges.
         local size,cf=part.Size,part.CFrame
-        if size and cf and cf.UpVector and cf.UpVector.Y>=0.72
+        local visualRoof=tostring(part.Name):lower()
+        visualRoof=visualRoof:find("roof",1,true) or visualRoof:find("canopy",1,true)
+            or visualRoof:find("awning",1,true) or visualRoof:find("ceiling",1,true)
+        if not visualRoof and size and cf and cf.UpVector and cf.UpVector.Y>=0.72
             and size.Y>0 and size.X>=size.Y*3 and size.Z>=size.Y*3 then
             return true
         end
