@@ -2226,9 +2226,59 @@ for _,item in ipairs({search,minPrice,maxPrice}) do
         state.Page=1;state.Dirty=true
     end)
 end
+-- STALL-B-LOBBY-001: manual B request, only in Market, never interrupt a sale.
+-- Reuse exactly the WorldUtil TeleportWorld Lobby remote from AIO.
+local lastStallBAt=-1000
+local function stallBackLobby()
+    if not state.Alive then return false end
+    if not marketPlace() then say("B LOBBY chỉ dùng trong Market Place.");return false end
+    if state.Busy or state.PurchaseBusy or saleBusy then
+        say("B LOBBY: đang quét/mua/bán; hoàn tất hoặc dừng tác vụ rồi thử lại.")
+        return false
+    end
+    local now=os.clock()
+    if now-lastStallBAt<4 then
+        say("B LOBBY: đã gửi gần đây; đợi 4 giây để tránh spam.")
+        return false
+    end
+    local fw=RS:FindFirstChild("Framework")
+    local gp=fw and fw:FindFirstChild("Gameplay")
+    local wp=gp and gp:FindFirstChild("WorldPlace")
+    local util=wp and wp:FindFirstChild("WorldUtil")
+    local remote=util and util:FindFirstChild("RemoteEvent")
+    if not remote and fw then
+        -- Fallback to the Framework module API used by Modular AIO.
+        local ok,module=pcall(require,fw)
+        if ok and type(module)=="table" and type(module.Modules)=="table" then
+            local worldUtil=module.Modules.WorldUtil
+            remote=worldUtil and worldUtil.RemoteEvent
+        end
+    end
+    if not remote or not remote:IsA("RemoteEvent") then
+        say("B LOBBY: chưa tìm thấy WorldUtil.RemoteEvent; không gửi lệnh.")
+        return false
+    end
+    lastStallBAt=now
+    local ok,err=pcall(function()
+        remote:FireServer("TeleportWorld","Lobby")
+    end)
+    if not ok then
+        say("B LOBBY gửi lỗi: "..tostring(err))
+        return false
+    end
+    state.PendingPurchase=nil -- no pending second-step purchase after leaving
+    say("B LOBBY: đã gửi TeleportWorld Lobby. Chờ game xác nhận chuyển map.")
+    print("[STALL_B_LOBBY] SENT; server transition not verified")
+    return true
+end
+state.ReturnLobby=stallBackLobby
+-- STALL-B-LOBBY-001 END
 state.Conn[#state.Conn+1]=Input.InputBegan:Connect(function(key,handled)
-    if not handled and state.Alive and key.KeyCode==Enum.KeyCode.H then
+    if not state.Alive or handled or Input:GetFocusedTextBox() then return end
+    if key.KeyCode==Enum.KeyCode.H then
         panel.Visible=not panel.Visible
+    elseif key.KeyCode==Enum.KeyCode.B then
+        stallBackLobby()
     end
 end)
 function state.Stop()
