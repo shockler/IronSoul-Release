@@ -1449,6 +1449,34 @@ local function refreshSale()
     end
     saleMsg("Đã đọc "..#ids.." loại Ore. Số stack × viên/stack × giá/viên.")
 end
+-- CLONE_PLAN_CORE_BEGIN: pure exact-total single-stack optimizer.
+-- For a stack of n units: n*MinPrice <= target <= n*MaxPrice.
+-- All smaller stacks fail the max bound, so ceil(target/MaxPrice) is optimal.
+local function planCloneStack(target,minPrice,maxPrice,stock)
+    target=intRange(target,1,1000000000)
+    minPrice=intRange(minPrice,1,1000000000)
+    maxPrice=intRange(maxPrice,1,1000000000)
+    stock=intRange(stock,0,1000000000)
+    if not target then return nil,"Nhập số Shards nguyên từ 1 đến 1 tỷ" end
+    if not minPrice or not maxPrice or maxPrice<minPrice then
+        return nil,"Thiếu Min/Max Ore hợp lệ từ ResBoothTradeable"
+    end
+    if stock==nil then return nil,"Số Ore trong túi chưa xác minh" end
+    local quantity=math.ceil(target/maxPrice)
+    if quantity<1 or quantity>1000000 then
+        return nil,"Vượt giới hạn 1.000.000 Ore/stack"
+    end
+    local low,high=quantity*minPrice,quantity*maxPrice
+    if target<low or target>high then
+        return nil,"Không có stack khớp chính xác giá trị này"
+    end
+    if quantity>stock then
+        return nil,"Thiếu Ore: cần "..quantity..", hiện có "..stock
+    end
+    return {Quantity=quantity,Price=target,MinAllowed=low,MaxAllowed=high}
+end
+-- CLONE_PLAN_CORE_END
+
 -- Scroll listing: RemoteSpy and BoothController verify List(UUID, price).
 -- Inventory formats can vary; only actual UUIDs from owned records are listed.
 local function validScrollUUID(s)
@@ -1764,6 +1792,292 @@ refreshScrollSale=function()
         "Attack Bonus, Skill Damage, Crit Rate, Crit Damage. "..
         diagnostics:sub(1,80))
 end
+-- CLONE_SHARD_TAB_BEGIN: four independent clone targets, one chosen owned Ore.
+-- No client-side purchases or automatic shard transfers. Seller manually lists
+-- exact-price stacks; a buyer still needs to purchase them in the game.
+local clone=Instance.new("Frame",panel)
+clone.Name="CloneShardPanel";clone.BackgroundColor3=Color.BG
+clone.BorderSizePixel=0;clone.Visible=false;clone.ZIndex=25
+clone.Position=UDim2.new(.008,0,.076,0);clone.Size=UDim2.new(.984,0,.906,0)
+local function cloneLabel(parent,str,x,y,w,h,fontSize,bold,wrap)
+    local obj=label(parent,str,x,y,w,h,fontSize,bold,wrap)
+    obj.ZIndex=27
+    return obj
+end
+local function cloneButton(parent,str,x,y,w,h,callback,tint)
+    local obj=button(parent,str,x,y,w,h,callback,tint)
+    obj.ZIndex=29
+    return obj
+end
+local function cloneField(parent,str,x,y,w,h)
+    local obj=field(parent,str,x,y,w,h,"")
+    obj.ZIndex=29
+    return obj
+end
+cloneLabel(clone,"CLONE | TÍNH ORE ÍT NHẤT ĐỂ NHẬN SHARDS",.018,.012,.77,.062,16,true)
+cloneLabel(clone,"Chọn 1 Ore trong túi → nhập 4 khoản Shards → xem số viên + tổng giá treo.",
+    .018,.087,.95,.056,12,false,true)
+cloneButton(clone,"ĐÓNG",.827,.014,.15,.067,function()clone.Visible=false end,Color.Red)
+cloneLabel(clone,"ORE TRONG TÚI (GIÁ MIN / MAX)",.018,.155,.398,.052,12,true)
+local cloneInventory=Instance.new("ScrollingFrame",clone)
+cloneInventory.Name="CloneOreInventory";cloneInventory.ZIndex=27
+cloneInventory.Position=UDim2.new(.018,0,.219,0)
+cloneInventory.Size=UDim2.new(.409,0,.590,0)
+cloneInventory.BorderSizePixel=0;cloneInventory.BackgroundColor3=Color.Panel
+cloneInventory.ScrollBarThickness=7;cloneInventory.CanvasSize=UDim2.fromOffset(0,0)
+local cloneInventoryLayout=Instance.new("UIListLayout",cloneInventory)
+cloneInventoryLayout.SortOrder=Enum.SortOrder.LayoutOrder
+cloneInventoryLayout.Padding=UDim.new(0,4)
+cloneInventoryLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    if cloneInventory.Parent then
+        cloneInventory.CanvasSize=UDim2.fromOffset(0,cloneInventoryLayout.AbsoluteContentSize.Y+8)
+    end
+end)
+
+local cloneSelected=nil
+local clonePending=nil
+local cloneSent={} -- one-shot sent signatures per session: never auto-relist.
+local cloneInputs,clonePreview={},{}
+local cloneSelectedLabel=cloneLabel(clone,"Chưa chọn Ore",.442,.155,.537,.063,12,true,true)
+cloneLabel(clone,"CLONE",.444,.236,.105,.04,11,true)
+cloneLabel(clone,"SHARDS",.559,.236,.165,.04,11,true)
+cloneLabel(clone,"ORE ÍT NHẤT",.737,.236,.16,.04,11,true)
+local cloneTotalLabel=cloneLabel(clone,"Tổng: chưa tính",.442,.738,.538,.058,12,true,true)
+local cloneStatus=cloneLabel(clone,"Chỉ tính giá treo (gross); phí game và mua thành công chưa được xác minh.",
+    .018,.918,.96,.066,11,false,true)
+local function cloneMsg(s)
+    cloneStatus.Text=tostring(s):sub(1,400)
+    print("[STALL_CLONE] "..tostring(s))
+end
+local function cloneOreRange(id)
+    local record=index["Ore\0"..tostring(id)]
+    if type(record)~="table" then return nil,nil end
+    return intRange(record.MinPrice,1,1000000000),
+        intRange(record.MaxPrice,1,1000000000)
+end
+local function cloneSignature(indexRow,id,plan)
+    return tostring(indexRow).."|"..tostring(id).."|"..tostring(plan.Price)
+        .."|"..tostring(plan.Quantity)
+end
+local function cloneCalculate()
+    local bag,bagError=oreBag()
+    local stock=bag and (tonumber(bag[cloneSelected]) or 0) or 0
+    local minimum,maximum=cloneSelected and cloneOreRange(cloneSelected) or nil,nil
+    if cloneSelected then
+        minimum,maximum=cloneOreRange(cloneSelected)
+    end
+    local info=cloneSelected and (cloneSelected.." | Túi: "..tostring(stock)
+        .." | Min: "..tostring(minimum or "?")
+        .." / Max: "..tostring(maximum or "?")) or "Chưa chọn Ore"
+    cloneSelectedLabel.Text=info
+    local plans={},totalQty,totalPrice,validCount=0,0,0
+    local failure=nil
+    for i=1,4 do
+        local raw=cloneInputs[i].Text
+        if not raw or raw:match("^%s*$") then
+            clonePreview[i].Text="—"
+        else
+            local plan,reason=planCloneStack(raw,minimum,maximum,stock)
+            if not cloneSelected then reason="Chưa chọn Ore";plan=nil end
+            if not bag then reason=bagError or "Không đọc được túi";plan=nil end
+            if plan then
+                plan.Signature=cloneSignature(i,cloneSelected,plan)
+                plans[i]=plan
+                totalQty=totalQty+plan.Quantity
+                totalPrice=totalPrice+plan.Price
+                validCount=validCount+1
+                clonePreview[i].Text=cloneSent[plan.Signature]
+                    and "ĐÃ GỬI" or (tostring(plan.Quantity).." viên")
+            else
+                clonePreview[i].Text="KHÔNG HỢP LỆ"
+                failure=failure or ("Clone "..i..": "..tostring(reason))
+            end
+        end
+    end
+    if not failure and validCount>0 and totalQty>stock then
+        failure="Không đủ "..cloneSelected..": cần "..totalQty
+            .." Ore cho cả 4; tồn "..stock
+    end
+    cloneTotalLabel.Text="Tổng "..validCount.." khoản: "..fmt(totalPrice)
+        .." Shards | "..fmt(totalQty).." Ore | Tồn "..fmt(stock)
+    return plans,failure,validCount,totalQty
+end
+local function cloneSnapshot(plans)
+    local parts={tostring(cloneSelected)}
+    for i=1,4 do
+        parts[#parts+1]=plans[i] and plans[i].Signature or "-"
+    end
+    return table.concat(parts,";")
+end
+
+local function cloneSendPlans(plans,rows)
+    if saleBusy or not state.Alive then cloneMsg("Đang bán hàng; không gửi trùng.");return end
+    if not marketPlace() then cloneMsg("Phải ở Stall Market mới treo bán.");return end
+    local bag,err=oreBag()
+    if not bag then cloneMsg(err);return end
+    local chosen=cloneSelected
+    local available=tonumber(bag[chosen]) or 0
+    local needed=0
+    for _,i in ipairs(rows) do
+        local plan=plans[i]
+        if not plan or cloneSent[plan.Signature] then
+            cloneMsg("Clone "..i..": chưa có plan hoặc đã gửi trong phiên này.")
+            return
+        end
+        needed=needed+plan.Quantity
+    end
+    if needed>available then
+        cloneMsg("Không đủ túi: cần "..needed.." Ore, có "..available..".")
+        return
+    end
+    saleBusy=true;saleStop=false;clonePending=nil
+    task.spawn(function()
+        local sent,remaining=0,available
+        for _,i in ipairs(rows) do
+            if not state.Alive or saleStop then break end
+            local plan=plans[i]
+            local liveBag=oreBag()
+            if not liveBag or (tonumber(liveBag[chosen]) or 0)<plan.Quantity
+                or remaining<plan.Quantity then
+                cloneMsg("Dừng: không đủ Ore hoặc dữ liệu túi thay đổi.")
+                break
+            end
+            if not marketPlace() then cloneMsg("Dừng: đã rời Stall Market.");break end
+            local ok,sendErr=pcall(function()
+                BoothRE:FireServer("ListStack","Ore",chosen,plan.Quantity,plan.Price)
+            end)
+            if not ok then cloneMsg("Lỗi gửi Clone "..i..": "..tostring(sendErr));break end
+            cloneSent[plan.Signature]=true
+            remaining=remaining-plan.Quantity
+            sent=sent+1
+            cloneMsg("Clone "..i..": đã gửi "..plan.Quantity.." "..chosen
+                .." giá "..fmt(plan.Price).." Shards; server chưa xác nhận listing.")
+            cloneCalculate()
+            if sent<#rows then task.wait(.8) end
+        end
+        saleBusy=false
+        if state.Alive then
+            cloneCalculate()
+            cloneMsg("Hoàn tất gửi "..sent.."/"..#rows
+                .." listing. Mở quầy kiểm tra trước khi clone mua.")
+        end
+    end)
+end
+for i=1,4 do
+    local row=i
+    local y=.295+(i-1)*.109
+    cloneLabel(clone,"Clone "..i,.443,y,.111,.072,12,true)
+    cloneInputs[i]=cloneField(clone,"VD: 1560",.559,y,.162,.078)
+    clonePreview[i]=cloneLabel(clone,"—",.735,y,.152,.078,12,true)
+    cloneButton(clone,"TREO",.889,y,.087,.078,function()
+        local plans,err=cloneCalculate()
+        if not plans[row] then
+            cloneMsg(err or "Clone "..row..": nhập mục tiêu hợp lệ trước.")
+            return
+        end
+        cloneSendPlans(plans,{row})
+    end,Color.Green)
+end
+for i=1,4 do
+    state.Conn[#state.Conn+1]=cloneInputs[i]:GetPropertyChangedSignal("Text"):Connect(function()
+        clonePending=nil
+        if state.Alive then cloneCalculate() end
+    end)
+end
+
+local function cloneRefreshInventory()
+    if saleBusy then cloneMsg("Đang gửi lệnh; chưa quét túi.");return end
+    local bag,err=oreBag()
+    if not bag then cloneMsg(err);return end
+    local ids={}
+    for id,count in pairs(bag) do
+        if type(id)=="string" and (tonumber(count) or 0)>0 then
+            ids[#ids+1]=id
+        end
+    end
+    table.sort(ids)
+    for _,child in ipairs(cloneInventory:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    if not cloneSelected or (tonumber(bag[cloneSelected]) or 0)<=0 then
+        cloneSelected=nil
+    end
+    for j,id in ipairs(ids) do
+        local row=Instance.new("Frame",cloneInventory)
+        row.Name="CloneOre_"..id
+        row.LayoutOrder=j
+        row.Size=UDim2.new(1,-9,0,54)
+        row.BackgroundColor3=Color.Field
+        row.BorderSizePixel=0;row.ZIndex=28
+        local mn,mx=cloneOreRange(id)
+        local stock=tonumber(bag[id]) or 0
+        local title=(id==cloneSelected and "✓ " or "")..id
+            .." | "..fmt(stock).." viên"
+            .." | "..tostring(mn or "?").."-"..tostring(mx or "?")
+        cloneButton(row,title,.015,.10,.97,.80,function()
+            cloneSelected=id
+            clonePending=nil
+            cloneCalculate()
+            cloneMsg("Đã chọn "..id..". Nhập các khoản Shards rồi bấm TREO.")
+        end,id==cloneSelected and Color.Green or Color.Blue)
+    end
+    cloneCalculate()
+    cloneMsg("Đã quét "..#ids.." loại Ore; chọn 1 loại có giá Min/Max hợp lệ.")
+end
+cloneButton(clone,"QUÉT LẠI TÚI",.019,.827,.192,.066,cloneRefreshInventory)
+cloneButton(clone,"TÍNH LẠI",.440,.825,.160,.066,function()
+    clonePending=nil
+    local _,err,n=cloneCalculate()
+    cloneMsg(err or ("Đã tính "..n.." khoản theo giá Max/Ore, ưu tiên ít viên nhất."))
+end)
+cloneButton(clone,"DỪNG",.221,.827,.145,.066,function()
+    saleStop=true
+    clonePending=nil
+    cloneMsg("Yêu cầu dừng sau lệnh đang gửi.")
+end,Color.Red)
+local cloneAllButton
+cloneAllButton=cloneButton(clone,"TREO CẢ 4",.616,.825,.359,.066,function()
+    if saleBusy then cloneMsg("Đang gửi lệnh, hãy chờ.");return end
+    local plans,err,count=cloneCalculate()
+    if err or count==0 then
+        clonePending=nil
+        cloneMsg(err or "Nhập ít nhất một khoản Shards.")
+        return
+    end
+    for i=1,4 do
+        if plans[i] and cloneSent[plans[i].Signature] then
+            clonePending=nil
+            cloneMsg("Clone "..i.." đã gửi. Chỉ TREO từng khoản còn lại.")
+            return
+        end
+    end
+    local signature=cloneSnapshot(plans)
+    if not clonePending or clonePending.Signature~=signature
+        or os.clock()>clonePending.Expires then
+        clonePending={Signature=signature,Expires=os.clock()+12}
+        cloneMsg("XÁC NHẬN: bán "..count.." stack, tổng "
+            ..cloneTotalLabel.Text..". Bấm TREO CẢ 4 lần nữa trong 12 giây.")
+        cloneAllButton.Text="XÁC NHẬN TREO"
+        return
+    end
+    clonePending=nil
+    cloneAllButton.Text="TREO CẢ 4"
+    local rows={}
+    for i=1,4 do if plans[i] then rows[#rows+1]=i end end
+    cloneSendPlans(plans,rows)
+end,Color.Green)
+
+-- Clone and Sell are independent panels, but share the same saleBusy lock.
+cloneButton(clone,"BÁN ORE / SCROLL",.018,.012,.0,.0,function()end)
+local cloneOpenButton=button(panel,"CLONE",.579,.017,.136,.055,function()
+    clone.Visible=not clone.Visible
+    if clone.Visible then
+        sale.Visible=false
+        cloneRefreshInventory()
+    end
+end,Color.Green)
+-- CLONE_SHARD_TAB_END
+
 sellButton(sale,"QUÉT ORE",.018,.072,.18,.05,refreshSale)
 sellButton(sale,"DỪNG BÁN",.215,.072,.18,.05,function()
     saleStop=true;bulkPending=nil;updateBulkButtons()
@@ -1772,7 +2086,8 @@ end)
 sellButton(sale,"QUÉT SCROLL",.425,.072,.32,.05,refreshScrollSale)
 
 sellButton(sale,"ĐÓNG",.80,.008,.18,.055,function()sale.Visible=false end)
-button(panel,"BÁN HÀNG",.577,.017,.14,.055,function()
+button(panel,"BÁN HÀNG",.440,.017,.129,.055,function()
+    clone.Visible=false
     sale.Visible=not sale.Visible
     if sale.Visible and #saleRows:GetChildren()<=1 then refreshSale() end
 end,Color.Green)
