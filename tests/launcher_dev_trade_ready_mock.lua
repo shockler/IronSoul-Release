@@ -5,7 +5,7 @@ local a=assert(all:find("function api.stop()",1,true))
 local b=assert(all:find("function api.prepare(channel)",a,true))
 local section=all:sub(a,b-1)
 assert(section:find("env.IronSoulTradeBuyerF7",1,true))
-assert(section:find("buyer.Panel:IsA",1,true))
+assert(section:find("buyer.IsTradeBuyer==true",1,true))
 local function playerGui()
     local v={}
     function v:FindFirstChild()return nil end
@@ -18,21 +18,15 @@ local env={IronSoulTradeBuyerF7=nil,IronSoulMainRuntime=nil,
 local mocks=setmetatable({api=api,env=env,Players=p},{__index=_G})
 assert(load(section,"launcher state slice","t",mocks))()
 assert(api.ready("Dev")==nil or api.ready("Dev")==false)
-local panel={Parent={}}
-function panel:IsA(kind)return kind=="GuiObject"end
-local buyer={Alive=true,Panel=panel,Stop=function()
-    buyer.Alive=false
-end}
--- Lua closures resolve the local declared above only after initialization;
--- assign Stop after creating buyer so tests use the real reference.
+local buyer={Alive=true,IsTradeBuyer=true}
 buyer.Stop=function() buyer.Alive=false end
 env.IronSoulTradeBuyerF7=buyer
 assert(api.ready("Dev")==true,"F7 Market Buyer must satisfy DEV ready")
 assert(api.ready("Stable")==nil or api.ready("Stable")==false,
     "DEV Market runtime must NOT masquerade as Stable")
-panel.Parent=nil
-assert(not api.ready("Dev"),"detached F7 panel cannot signal DEV ready")
-panel.Parent={}
+buyer.IsTradeBuyer=false
+assert(not api.ready("Dev"),"unverified runtime cannot signal DEV Trade ready")
+buyer.IsTradeBuyer=true
 api.stop()
 assert(buyer.Alive==false,"back/channel switch must stop F7")
 assert(env.IronSoulTradeBuyerF7~=nil or buyer.Alive==false)
