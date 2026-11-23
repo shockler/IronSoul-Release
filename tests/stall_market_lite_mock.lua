@@ -122,10 +122,9 @@ local env={state=state,marketPlace=function()return market end,
     Workspace=Workspace,change=change,restore=restore,disconnect=disconnect,
     task=task}
 setmetatable(env,{__index=_G})
-local chunk,reason=load(block,"market_lite_actual","t",env)
+local chunk,reason=load(block.."\nreturn setMarketLite","market_lite_actual","t",env)
 assert(chunk,reason)
-chunk()
-local setMarketLite=assert(env.setMarketLite)
+local setMarketLite=assert(chunk())
 -- No visual changes outside Market.
 market=false
 setMarketLite(true)
