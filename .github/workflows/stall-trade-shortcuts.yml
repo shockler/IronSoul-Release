@@ -8,6 +8,7 @@ on:
       - Stall.lua
       - IronSoul_Launcher_Stall_V5.lua
       - tests/stall_b_lobby_mock.lua
+      - tests/stall_f7_unified_mock.lua
       - tests/launcher_dev_trade_ready_mock.lua
       - .github/workflows/stall-trade-shortcuts.yml
   workflow_dispatch:
@@ -31,9 +32,12 @@ jobs:
           luac5.4 -p Stall.lua
           luac5.4 -p IronSoul_Launcher_Stall_V5.lua
           luac5.4 -p tests/stall_b_lobby_mock.lua
+          luac5.4 -p tests/stall_f7_unified_mock.lua
           luac5.4 -p tests/launcher_dev_trade_ready_mock.lua
       - name: B Hotkey exact Lobby remote mock
         run: lua5.4 tests/stall_b_lobby_mock.lua
+      - name: In-Stall F7 button exact Ore buyer; no overlay
+        run: lua5.4 tests/stall_f7_unified_mock.lua
       - name: Trade F7 DEV launcher ready and Back cleanup mock
         run: lua5.4 tests/launcher_dev_trade_ready_mock.lua
       - name: Previously verified Market Lite and Clone planner
