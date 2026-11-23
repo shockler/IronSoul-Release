@@ -1,0 +1,35 @@
+name: Stall Market Lite visual-only buildings (NO PUBLISH)
+on:
+  push:
+    branches: [feat/stall-market-lite-visuals-20261124]
+  pull_request:
+    branches: [main]
+    paths:
+      - Stall.lua
+      - tests/stall_market_lite_mock.lua
+      - .github/workflows/stall-market-lite.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y lua5.4
+      - name: Lua syntax + isolated actual Market Lite scene safety
+        run: |
+          luac5.4 -p Stall.lua
+          luac5.4 -p tests/stall_market_lite_mock.lua
+          lua5.4 tests/stall_market_lite_mock.lua
+      - name: Existing Clone shard planner regression
+        run: lua5.4 tests/clone_shard_planner.lua
+      - name: No AIO or Stable changes
+        run: echo 'Only Stall.lua release standalone; no AIO DEV or Stable.'
