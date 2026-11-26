@@ -1,5 +1,18 @@
 -- Execute the actual V6 scorer, bulk selector and shared listing guard.
 local f=assert(io.open("Stall.lua","rb"));local source=f:read("*a");f:close()
+-- Preserve the deployed launcher's readiness and teardown GUI contract.
+local lf=assert(io.open("IronSoul_Launcher_Stall_V5.lua","rb"))
+local launcher=lf:read("*a");lf:close()
+local guiName=assert(source:match('gui%.Name="([^"]+)"'))
+local refs=0
+for name in launcher:gmatch('PlayerGui:FindFirstChild%("([^"]+)"%)') do
+    if name:match("^IronSoulScrollMarketScanner") then
+        refs=refs+1
+        assert(name==guiName,"Launcher readiness/cleanup must use actual Stall GUI name")
+    end
+end
+assert(refs==2,"verify both readiness and cleanup")
+assert(source:find("STALL MARKET v6",1,true),"V6 display label must remain")
 local function section(a,b)
     local first=assert(source:find(a,1,true))
     return source:sub(first,assert(source:find(b,first,true))-1)

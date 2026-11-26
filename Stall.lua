@@ -882,7 +882,8 @@ end
 -- SCROLL_V4_TP_END
 
 local gui=Instance.new("ScreenGui")
-gui.Name="IronSoulScrollMarketScannerV6"
+-- Keep the public GUI identifier compatible with already deployed V5 launchers.
+gui.Name="IronSoulScrollMarketScannerV5"
 gui.ResetOnSpawn=false;gui.IgnoreGuiInset=true
 -- Above native Stall popup so scanning/buy confirmation remains accessible.
 gui.DisplayOrder=100006;gui.Parent=GuiRoot
