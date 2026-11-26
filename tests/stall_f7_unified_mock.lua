@@ -31,16 +31,15 @@ local function runCase(opt)
         ItemType="Scroll",ItemID="Scroll_10",Price=1560,
         ListingId="scroll-must-not-buy"
     }}
-    local dataUtil={}
+    local currencyUtil={}
     local player={UserId=200}
-    function dataUtil:GetValue(who,path)
-        assert(who==player)
-        if #path==0 then
-            return balance==nil and {} or {Currencies={OriginShard=balance}}
-        end
-        if #path==2 and path[1]=="Currencies" and path[2]=="OriginShard" then
-            return balance
-        end
+    local reads=0
+    function currencyUtil:GetCount(who,id)
+        assert(who==player and id=="Gem","must use initialized native Gem API")
+        reads=reads+1
+        if opt.balanceError then error("not ready") end
+        if reads>1 and opt.changedBalance then return opt.changedBalance end
+        return balance
     end
     local framework=node()
     local RS=node({Framework=framework})
@@ -60,6 +59,7 @@ local function runCase(opt)
             state.Full[slot]={OwnerUserId=owner,Items=items}
             state.FullAt[slot]=clock
             state.ResponseSlot=slot
+            if opt.stopOnDetail then state.Alive=false end
         end
     end
     local buttons={}
@@ -99,7 +99,7 @@ local function runCase(opt)
         button=button,panel={},Color={Green={}},
         task={spawn=function(fn)fn()end,wait=function(dt)clock=clock+(dt or .1)end},
         os={clock=function()return clock end},
-        require=function(m)assert(m==framework);return {Modules={DataUtil=dataUtil}}end
+        require=function(m)assert(m==framework);return {Modules={CurrencyUtil=currencyUtil}}end
     }
     setmetatable(env,{__index=_G})
     local f,err=load(section.."\nreturn state.F7BuyExact","actual Stall F7","t",env)
@@ -160,4 +160,11 @@ assert(unknownId.state.PurchasesSent==0,"missing ListingId must block")
 local timeout=runCase({timeout=true})
 timeout.buy()
 assert(timeout.state.PurchasesSent==0,"server no response must not buy")
+for _,opt in ipairs({
+ {balance=-1},{balance=1.5},{balance=0/0},{balance=math.huge},
+ {balance="1560"},{balanceError=true},{changedBalance=1559},{stopOnDetail=true}
+}) do
+    local case=runCase(opt);case.buy()
+    assert(case.state.PurchasesSent==0,"invalid/changing balance or stop must block")
+end
 print("PASS STALL F7 UNIFIED: real in-panel button, exact owner+price+Ore, busy/duplicate safeguards")
