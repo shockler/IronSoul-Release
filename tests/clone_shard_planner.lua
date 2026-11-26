@@ -49,11 +49,11 @@ local ui=source:sub(uiStart,uiEnd)
 assert(ui:find("CloneShardPanel",1,true))
 assert(ui:find("CloneOreInventory",1,true))
 assert(ui:find("for i=1,4 do",1,true),"exactly 4 input slots")
-assert(ui:find("cloneSent[plan.Signature]=true",1,true),
-    "listing safety: suppress duplicate clicks in the session")
+assert(ui:find("cloneInFlight[plan.Signature]=true",1,true),
+    "listing safety: suppress concurrent clicks")
 assert(ui:find("clonePending={Signature=signature,Expires=os.clock()+12}",1,true),
     "all-list requires two-step confirmation")
-assert(ui:find('BoothRE:FireServer("ListStack","Ore",chosen,plan.Quantity,plan.Price)',1,true),
+assert(ui:find('SaleGuard.Ore(chosen,plan.Quantity,plan.Price)',1,true),
     "must use exact-quantity exact-total ListStack")
 assert(ui:find("if not marketPlace()",1,true),"must require Market Place")
 assert(ui:find("if saleBusy",1,true),"must respect shared sell lock")
@@ -66,4 +66,8 @@ assert(ui:find("Treo",1,true) or ui:find("TREO",1,true))
 assert(source:find('clone.Visible=false',uiEnd,true),
     "opening existing Sell panel must close Clone panel")
 assert(not ui:find("PurchaseStack",1,true),"Clone tab must never auto-purchase")
+assert(ui:find("cloneInFlight[plan.Signature]=nil",1,true),"confirmed manual repeat must unlock")
 print("PASS: 4 Clone targets exact prices, min Ore, stock limits, 2-click confirmation, no auto purchase")
+
+-- V6 regression suite shares this existing CI job; no new workflow.
+dofile("tests/stall_v6_mock.lua")
