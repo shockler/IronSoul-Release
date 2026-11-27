@@ -263,6 +263,31 @@ assert(not sendScroll(records[1],9) and not sendScroll(records[1],31),"manual le
 assert(sendScroll(records[1],15))
 assert(not sendScroll(records[1],15) and sends==1,"UUID one shot")
 print("PASS V6 Scroll: real inventory scorer/sort, tradeability, equipped allowed, duplicate UUID, manual bounds, removal ACK")
+do
+    local id,uuid="Scroll_Gun_2","native-scroll-uuid-0001"
+    local raw={Id=id,UUID=uuid,Attrs={AttackBonus=10,HealthBonus=20}}
+    local bag={[uuid]=raw,other={}}
+    local attrs,_,quality=parse(raw)
+    local rec={Id=id,UUID=uuid,Attrs=attrs,Premium=quality,Rarity=6,Min=10,Max=30}
+    local calls=0
+    local fast={LocalPlayer={},saleAttempted={},validScrollUUID=valid,intRange=intRange,parseStats=parse,
+        parseRarity=function(r)return r.Rarity end,index={["Scroll\0"..id]={MinPrice=10,MaxPrice=30}},
+        scanOwnedScrolls=function()error("must not rescan entire bag on native UUID path")end,
+        ScrollUtil={GetOwnedScrollData=function(_,p,k)calls=calls+1;return bag[k] end,
+            GetAllOwned=function()return bag end,GetDef=function()return {Rarity=6,CanTrade=true} end}}
+    local live=loadIn(section("local function sameOwnedScroll","local updateBulkButtons").."\nreturn liveOwnedScroll",fast)
+    assert(live(rec) and calls==1)
+    raw.Attrs.AttackBonus=11
+    assert(not live(rec),"changed stats reject stale selection")
+    raw.Attrs.AttackBonus=10
+    raw.Locked=true
+    assert(not live(rec),"locked item cannot pass direct UUID check")
+    raw.Locked=nil
+    bag[uuid]=nil
+    assert(not live(rec),"missing item cannot pass direct UUID check")
+    print("PASS V6.3 native UUID revalidation without full inventory parse")
+end
+
 
 do
     local nodes={}
