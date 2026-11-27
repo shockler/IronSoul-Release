@@ -1,4 +1,4 @@
--- IRON SOUL DUNGEON | STALL MARKET v6.1 | nine-column scanner + Ore listing UI + TP + reversible low-FX
+-- IRON SOUL DUNGEON | STALL MARKET v6.2 | nine-column scanner + Ore listing UI + TP + reversible low-FX
 -- Source evidence: BoothController:GetAllStalls(), BoothRE:RequestBoothShows,
 -- BoothRE events BoothShows/BoothShowUpdate/StallView/StallRefresh.
 -- SCAN/DEEP SCAN are read-only. Purchase occurs ONLY after explicit two-step
@@ -1044,7 +1044,7 @@ end
 local search=field(panel,"Tên Scroll / Skill / chỉ số / người bán",.014,.092,.37,.050,"")
 local minPrice=field(panel,"Min $",.392,.092,.14,.050,"")
 local maxPrice=field(panel,"Max $",.541,.092,.14,.050,"")
-label(panel,"STALL MARKET v6.1 | SCAN / MUA / BÁN ORE + SCROLL",.014,.018,.72,.058,15,true)
+label(panel,"STALL MARKET v6.2 | SCAN / MUA / BÁN ORE + SCROLL",.014,.018,.72,.058,15,true)
 button(panel,"H ẨN",.825,.017,.081,.055,function()panel.Visible=false end)
 button(panel,"X",.915,.017,.070,.055,function() state.Stop() end,Color.Red)
 local list=Instance.new("ScrollingFrame",panel)
@@ -1889,7 +1889,17 @@ local function scanOwnedScrolls()
         diagnostics[#diagnostics+1]=name..":"..(found and "OK" or "N/A")
         if found then sources[#sources+1]={Name=name,Value=val} end
     end
-    if type(ScrollUtil)=="table" then
+    -- Native ScrollUtil owns Id/UUID/Attrs. Rarity is in the definition, not
+    -- in the owned row (GiveScroll/GiveScrollWithData/GiveScrollFromData).
+    local nativeOwned=false
+    if type(ScrollUtil)=="table" and type(ScrollUtil.GetAllOwned)=="function" then
+        local ok,v=pcall(function()return ScrollUtil:GetAllOwned(LocalPlayer)end)
+        -- GetAllOwned returns {} even if the profile is not ready. Require an
+        -- actual data source for empty inventory before treating removal as ACK.
+        nativeOwned=ok and type(v)=="table" and next(v)~=nil
+        source("ScrollUtil.GetAllOwned",nativeOwned,v)
+    end
+    if not nativeOwned and type(ScrollUtil)=="table" then
         for _,method in ipairs({"GetOwned","GetOwnedScrolls","GetInventory","GetScrolls"}) do
             if type(ScrollUtil[method])=="function" then
                 local ok,v=pcall(function()return ScrollUtil[method](ScrollUtil,LocalPlayer)end)
@@ -1899,8 +1909,8 @@ local function scanOwnedScrolls()
                 source("ScrollUtil."..method,ok,v)
             end
         end
-    else diagnostics[#diagnostics+1]="ScrollUtil:MISSING" end
-    if dataUtil then
+    elseif not nativeOwned then diagnostics[#diagnostics+1]="ScrollUtil:MISSING" end
+    if not nativeOwned and dataUtil then
         local okData,playerData=pcall(function()return dataUtil:GetPlayerData(LocalPlayer)end)
         if okData and type(playerData)=="table" then
             for _,key in ipairs({"Scrolls","Scroll","OwnedScrolls","ScrollInventory"}) do
@@ -1930,7 +1940,7 @@ local function scanOwnedScrolls()
                 source("DataUtil."..name,ok,v)
             end
         end
-    else diagnostics[#diagnostics+1]="DataUtil:MISSING" end
+    elseif not nativeOwned then diagnostics[#diagnostics+1]="DataUtil:MISSING" end
     local function register(raw,key,origin)
         if type(raw)~="table" then return false end
         local id=scrollResource(raw)
@@ -1948,9 +1958,19 @@ local function scanOwnedScrolls()
         local def=id and index["Scroll\0"..id]
         local min=type(def)=="table" and intRange(def.MinPrice,1,1000000000) or nil
         local max=type(def)=="table" and intRange(def.MaxPrice,1,1000000000) or nil
-        local rarity=parseRarity(raw)
+        local scrollDef=nil
+        if id and type(ScrollUtil)=="table" and type(ScrollUtil.GetDef)=="function" then
+            local ok,v=pcall(function()return ScrollUtil:GetDef(id)end)
+            if ok and type(v)=="table" then scrollDef=v end
+        end
+        if not scrollDef and id and type(ScrollDefinitions)=="table" then
+            scrollDef=ScrollDefinitions[id]
+        end
+        if type(scrollDef)~="table" or (scrollDef.ID and scrollDef.ID~=id) then scrollDef=nil end
+        local rarity=scrollDef and parseRarity(scrollDef) or nil
+        if rarity==nil and not nativeOwned then rarity=parseRarity(raw) end
         local quality=(#attrs>=1 and #attrs<=4 and premium<=4 and (#attrs==4 or rarity~=nil)) and premium or nil
-        local explicitBlocked=raw.Tradeable==false or raw.Tradable==false or raw.CanTrade==false
+        local explicitBlocked=(scrollDef and scrollDef.CanTrade==false) or raw.Tradeable==false or raw.Tradable==false or raw.CanTrade==false
             or raw.Locked==true or raw.IsLocked==true or raw.IsListed==true or raw.Listed==true
         local record={UUID=uuid,Id=id,Name=name,Attrs=attrs,
             Rarity=rarity,GoodSum=goodSum or 0,
@@ -2245,7 +2265,7 @@ refreshScrollSale=function()
     saleRows.CanvasSize=UDim2.fromOffset(0,saleLayout.AbsoluteContentSize.Y+8)
     updateBulkButtons()
     saleMsg("Hiện "..visible.."/"..#items.." Scroll; "..unresolved.." thiếu UUID; "..unknown.." chưa rõ rarity." )
-    if unknown>0 then print("[STALL_V61_RARITY] "..unknown.." instance(s) lack verified rolled rarity; native ScrollUtil source needed.") end
+    if unknown>0 then print("[STALL_V62_RARITY] "..unknown.." instance(s) lack verified Scroll definition rarity.") end
 end
 -- STALL_V61_RESIZE_BEGIN
 state.Conn[#state.Conn+1]=panel:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
