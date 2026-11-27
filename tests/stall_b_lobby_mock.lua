@@ -45,20 +45,29 @@ local function case(saleBusy, fallback)
   local panel={Visible=visible}
   local state={Alive=true,Busy=false,PurchaseBusy=false,Conn={},PendingPurchase={}}
   local market=true
-  local exports=assert(load("return function(RS,marketPlace,state,saleBusy,os,require,say,Input,panel,Enum)\n"
+  local renderCalls={}
+  local runService={Heartbeat=signal()}
+  function runService:Set3dRenderingEnabled(on)renderCalls[#renderCalls+1]=on end
+  local game={GetService=function(_,name)assert(name=="RunService");return runService end}
+  local exports=assert(load("return function(RS,marketPlace,state,saleBusy,os,require,say,Input,panel,Enum,game,label,sale)\n"
     ..source.."\nreturn state.ReturnLobby\nend","real stall b mock","t"))()
   local run=exports(RS,function()return market end,state,saleBusy,gameOS,
     function()
       return {Modules={WorldUtil={RemoteEvent=remote}}}
     end,
     function(m)logs[#logs+1]=m end,input,panel,
-    {KeyCode={H="H",B="B"}})
+    {KeyCode={H="H",B="B",F7="F7",F8="F8"}},game,function(_,text)return {Text=text}end,{Visible=false})
   return {
-    input=input,state=state,remote=remote,calls=calls,logs=logs,panel=panel,run=run,
+    input=input,state=state,remote=remote,calls=calls,logs=logs,panel=panel,run=run,renderCalls=renderCalls,
     setMarket=function(v)market=v end,setTime=function(v)clock=v end
   }
 end
 local test=case(false,false)
+assert(test.state.NoRender==false and test.renderCalls[1]==true,"No Render defaults OFF")
+test.input.InputBegan:Fire({KeyCode="F8"},false)
+assert(test.state.NoRender==true and test.renderCalls[2]==false,"F8 disables 3D rendering")
+test.input.InputBegan:Fire({KeyCode="F8"},false)
+assert(test.state.NoRender==false and test.renderCalls[3]==true,"F8 restores rendering")
 test.input.InputBegan:Fire({KeyCode="B"},true)
 assert(#test.calls==0,"processed input must not teleport")
 test.input.focused=true
