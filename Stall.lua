@@ -1,4 +1,4 @@
--- IRON SOUL DUNGEON | STALL MARKET v6.0 | nine-column scanner + Ore listing UI + TP + reversible low-FX
+-- IRON SOUL DUNGEON | STALL MARKET v6.1 | nine-column scanner + Ore listing UI + TP + reversible low-FX
 -- Source evidence: BoothController:GetAllStalls(), BoothRE:RequestBoothShows,
 -- BoothRE events BoothShows/BoothShowUpdate/StallView/StallRefresh.
 -- SCAN/DEEP SCAN are read-only. Purchase occurs ONLY after explicit two-step
@@ -224,9 +224,13 @@ local function parseStats(raw)
     end
     return stats,foundKinds,match,"OK",sum
 end
-local rarityInfo={}
+local rarityInfo={
+    [1]={Name="Common"},[2]={Name="Uncommon"},[3]={Name="Rare"},
+    [4]={Name="Epic"},[5]={Name="Legendary"},[6]={Name="Mythic"},[7]={Name="Secret"}
+}
 local function parseRarity(v)
-    for _,key in ipairs({"Rarity","RarityID","RarityId","Grade","Quality"}) do
+    if type(v)~="table" then return nil end
+    for _,key in ipairs({"Rarity","RarityID","RarityId","RarityLevel","ScrollRarity","ItemRarity","Grade","Quality"}) do
         local value=v[key]
         if type(value)=="number" and value%1==0 then return value end
         if type(value)=="string" then
@@ -236,6 +240,22 @@ local function parseRarity(v)
             if value:lower()=="mythic" then return 6 end
             local num=tonumber(value)
             if num and num%1==0 then return num end
+        end
+    end
+    -- Explicit rolled instance metadata only, never infer from stat count.
+    for _,key in ipairs({"ScrollInfo","ScrollData","ItemData","Info","Data","ItemInfo"}) do
+        local nested=v[key]
+        if type(nested)=="table" and nested~=v then
+            for _,field in ipairs({"Rarity","RarityID","RarityId","RarityLevel","ScrollRarity","ItemRarity"}) do
+                local value=nested[field]
+                local id=tonumber(value)
+                if id and id%1==0 and id>=1 and id<=7 then return id end
+                if type(value)=="string" then
+                    for n,info in pairs(rarityInfo) do
+                        if tostring(info.Name):lower()==value:lower() then return n end
+                    end
+                end
+            end
         end
     end
     return nil
@@ -269,7 +289,7 @@ local function rarityStyle(id)
         Color3.fromRGB(255,135,215)}
     local color=info and info.Color
     if typeof(color)~="Color3" then color=palette[tonumber(id)] or palette[1] end
-    local name=info and tostring(info.Name) or (id==6 and "Mythic" or "R"..tostring(id or "?"))
+    local name=info and tostring(info.Name) or "Chưa rõ"
     return name,color
 end
 local function goodStatText(text)
@@ -893,7 +913,35 @@ panel.Size=UDim2.new(.96,0,.92,0)
 panel.Position=UDim2.new(.02,0,.04,0)
 panel.BorderSizePixel=0
 local minSize=Instance.new("UISizeConstraint",panel)
-minSize.MinSize=Vector2.new(780,375)
+minSize.MinSize=Vector2.new(0,0)
+-- STALL_V61_LAYOUT_BEGIN
+function state.FitColumns(rows,viewport,sell)
+    local width=math.max(1,viewport or 1)
+    local longestName,longestOwner=0,0
+    local function measure(text)
+        local ok,size=pcall(function()
+            return game:GetService("TextService"):GetTextSize(tostring(text or ""),11,
+                Enum.Font.GothamBold,Vector2.new(10000,1000))
+        end)
+        return ok and size.X or #tostring(text or "")*7
+    end
+    for _,r in ipairs(rows) do
+        longestName=math.max(longestName,measure(r.Name))
+        longestOwner=math.max(longestOwner,measure(r.Owner))
+    end
+    local function clamp(n,lo,hi)return math.max(lo,math.min(hi,n))end
+    local name=clamp((longestName+14)/width,.13,.23)
+    if sell then
+        local quick,manual=.075,.165
+        local stat=(1-name-quick*3-manual)/4
+        return {name,stat,stat,stat,stat,quick,quick,quick,manual}
+    end
+    local owner=clamp((longestOwner+14)/width,.075,.13)
+    local price,buy,tp=.075,.075,.055
+    local stat=(1-name-owner-price-buy-tp)/4
+    return {name,owner,stat,stat,stat,stat,price,buy,tp}
+end
+-- STALL_V61_LAYOUT_END
 local function label(parent,text,x,y,w,h,size,bold,wrap)
     local t=Instance.new("TextLabel",parent)
     t.BackgroundTransparency=1;t.Text=tostring(text or "")
@@ -991,15 +1039,20 @@ end
 local search=field(panel,"Tên Scroll / Skill / chỉ số / người bán",.014,.092,.37,.050,"")
 local minPrice=field(panel,"Min $",.392,.092,.14,.050,"")
 local maxPrice=field(panel,"Max $",.541,.092,.14,.050,"")
-label(panel,"STALL MARKET v6 | SCAN / MUA / BÁN ORE + SCROLL",.014,.018,.72,.058,15,true)
+label(panel,"STALL MARKET v6.1 | SCAN / MUA / BÁN ORE + SCROLL",.014,.018,.72,.058,15,true)
 button(panel,"H ẨN",.825,.017,.081,.055,function()panel.Visible=false end)
 button(panel,"X",.915,.017,.070,.055,function() state.Stop() end,Color.Red)
 local list=Instance.new("ScrollingFrame",panel)
-list.Name="ScrollListings";list.Position=UDim2.new(.012,0,.293,0)
-list.Size=UDim2.new(.975,0,.598,0)
+list.Name="ScrollListings";list.Position=UDim2.new(.012,0,.327,0)
+list.Size=UDim2.new(.975,0,.564,0)
 list.BorderSizePixel=0;list.BackgroundColor3=Color.Panel
-list.ScrollBarThickness=8;list.ScrollingDirection=Enum.ScrollingDirection.XY
+list.ScrollBarThickness=8;list.ScrollingDirection=Enum.ScrollingDirection.Y
 list.CanvasSize=UDim2.fromOffset(0,0)
+state.BuyHeader=Instance.new("Frame",panel)
+state.BuyHeader.Position=UDim2.new(.012,0,.287,0)
+state.BuyHeader.Size=UDim2.new(.975,-10,.038,0)
+state.BuyHeader.BackgroundColor3=Color.Field;state.BuyHeader.BorderSizePixel=0
+state.HideOwn=true;state.BuyRarity="ALL"
 local layout=Instance.new("UIListLayout",list)
 layout.SortOrder=Enum.SortOrder.LayoutOrder
 layout.Padding=UDim.new(0,3)
@@ -1014,20 +1067,24 @@ local function getFiltered()
     local mn=tonumber(minPrice.Text)
     local mx=tonumber(maxPrice.Text)
     local result={}
+    local hidden=0
     for _,r in ipairs(all) do
+        local own=r.OwnerUserId==LocalPlayer.UserId or tostring(r.Owner):lower()=="vnbshockler"
+        if state.HideOwn and own then hidden=hidden+1 end
         local joined=(r.Name.." "..r.Id.." "..r.Owner.." "..
             table.concat(r.Stats," ")):lower()
-        if (q=="" or joined:find(q,1,true)) and
+        if (not state.HideOwn or not own) and (state.BuyRarity=="ALL" or r.Rarity==state.BuyRarity) and (q=="" or joined:find(q,1,true)) and
             (not mn or r.Price and r.Price>=mn) and
             (not mx or r.Price and r.Price<=mx) then
             result[#result+1]=r
         end
     end
     table.sort(result,function(a,b)
-        if state.Sort=="QUALITY" and a.Matched~=b.Matched then
+        if state.Sort=="RARITY" and (a.Rarity or 0)~=(b.Rarity or 0) then return (a.Rarity or 0)>(b.Rarity or 0) end
+        if (state.Sort=="QUALITY" or state.Sort=="RARITY") and a.Matched~=b.Matched then
             return a.Matched>b.Matched
         end
-        if state.Sort=="QUALITY" and a.GoodSum~=b.GoodSum then
+        if (state.Sort=="QUALITY" or state.Sort=="RARITY") and a.GoodSum~=b.GoodSum then
             return a.GoodSum>b.GoodSum
         end
         local va=state.Sort=="REFERENCE" and a.Ref and a.Ref>0 and a.Price and a.Price/a.Ref
@@ -1039,7 +1096,7 @@ local function getFiltered()
         if va~=vb then return (va or 1e18)<(vb or 1e18) end
         return a.Slot<b.Slot
     end)
-    return all,result
+    return all,result,hidden
 end
 local function requestShows()
     if state.SaleBusy then say("Đang xác minh bán; chờ hoàn tất.");return false end
@@ -1295,7 +1352,7 @@ local function report()
 end
 local function render()
     if not state.Alive or not gui.Parent then return end
-    local all,filtered=getFiltered()
+    local all,filtered,hidden=getFiltered()
     local occupied=countOccupied()
     local details=0
     for _ in pairs(state.Full) do details=details+1 end
@@ -1304,13 +1361,11 @@ local function render()
     stats.Text="CÓ NGƯỜI "..occupied.."/"..marketCap
         .."  | EMPTY "..(state.SnapshotReceived and tostring(state.EmptyCount) or "?")
         .." | DETAIL "..details.." | TẤT CẢ SCROLL "..#all
-        .." | ĐẠT MYTHIC DPS "..#filtered
+        .." | HIỆN "..#filtered.." | ẨN CỦA TÔI "..hidden
         .." | PAGE "..state.Page.."/"..pages
     clearRows()
-    -- Nine explicit columns; use a horizontal canvas when Delta's viewport
-    -- is narrow instead of squeezing four distinct attributes together.
-    local tableWidth=math.max(1500,math.floor(list.AbsoluteSize.X)-16)
-    local widths={.204,.111,.121,.121,.121,.121,.074,.061,.066}
+    local widths=state.FitColumns(filtered,list.AbsoluteSize.X,false)
+    for _,child in ipairs(state.BuyHeader:GetChildren()) do child:Destroy() end
     local function cell(parent,text,x,width,size,bold,paint)
         local l=label(parent,text,x+.005,.07,width-.01,.86,size or 11,bold,true)
         l.TextYAlignment=Enum.TextYAlignment.Center
@@ -1319,7 +1374,7 @@ local function render()
     end
     local function base(order,height,shade)
         local frame=Instance.new("Frame",list)
-        frame.Size=UDim2.fromOffset(tableWidth,height)
+        frame.Size=UDim2.new(1,-10,0,height)
         frame.LayoutOrder=order;frame.BorderSizePixel=0
         frame.BackgroundColor3=shade or Color.BG
         return frame
@@ -1347,7 +1402,7 @@ local function render()
     local titles={"1 · TÊN SCROLL","2 · NGƯỜI BÁN","3 · CHỈ SỐ 1",
         "4 · CHỈ SỐ 2","5 · CHỈ SỐ 3","6 · CHỈ SỐ 4",
         "7 · GIÁ ($)","8 · MUA","9 · TP"}
-    local head=base(1,30,Color.Field)
+    local head=state.BuyHeader
     local cursor=0
     for i,title in ipairs(titles) do
         cell(head,title,cursor,widths[i],11,true)
@@ -1360,8 +1415,8 @@ local function render()
     for idx=first,last do
         local r=filtered[idx]
         display=display+1
-        local row=base(display+1,58,display%2==0 and Color.Panel or Color.BG)
-        cell(row,r.Name.."\n#"..r.Slot.." · R"..tostring(r.Rarity or "?").." · "..r.Matched.."/5 DPS",
+        local row=base(display,38,display%2==0 and Color.Panel or Color.BG)
+        cell(row,r.Name.."\n#"..r.Slot.." · "..rarityStyle(r.Rarity).." · "..r.Matched.."/5",
             0,widths[1],11,true,select(2,rarityStyle(r.Rarity)))
         cell(row,r.Owner,widths[1],widths[2],11,true)
         local x=widths[1]+widths[2]
@@ -1390,11 +1445,30 @@ local function render()
             function()teleportToStall(r)end,Color.Green)
         separators(row)
     end
-    list.CanvasSize=UDim2.fromOffset(tableWidth,30+display*61+5)
+    list.CanvasSize=UDim2.fromOffset(0,display*41+5)
     state.LastRender=os.clock()
     state.Dirty=false
 end
 
+do
+    local ownBtn
+    ownBtn=button(panel,"ẨN HÀNG CỦA TÔI: ON",.014,.247,.25,.036,function()
+        state.HideOwn=not state.HideOwn
+        ownBtn.Text="ẨN HÀNG CỦA TÔI: "..(state.HideOwn and "ON" or "OFF")
+        state.Page=1;state.Dirty=true
+    end,Color.Green)
+    local rarityBtn
+    rarityBtn=button(panel,"RARITY: ALL",.272,.247,.18,.036,function()
+        local ids={"ALL"}
+        for id in pairs(rarityInfo) do ids[#ids+1]=id end
+        table.sort(ids,function(a,b)if a=="ALL" then return b~="ALL" elseif b=="ALL" then return false end return a>b end)
+        local i=1
+        for n,id in ipairs(ids) do if id==state.BuyRarity then i=n end end
+        state.BuyRarity=ids[i%#ids+1]
+        rarityBtn.Text="RARITY: "..(state.BuyRarity=="ALL" and "ALL" or rarityStyle(state.BuyRarity))
+        state.Page=1;state.Dirty=true
+    end)
+end
 button(panel,"SCAN",.013,.919,.13,.055,requestShows,Color.Green)
 button(panel,"DEEP CÓ NGƯỜI",.149,.919,.155,.055,deepScan)
 button(panel,"STOP",.310,.919,.09,.055,function()
@@ -1434,7 +1508,7 @@ button(panel,"GHI TP",.724,.919,.066,.055,function()
 end)
 local sortBtn
 sortBtn=button(panel,"SORT: QUALITY",.795,.919,.192,.055,function()
-    state.Sort=({QUALITY="PRICE",PRICE="REFERENCE",REFERENCE="NAME",NAME="QUALITY"})[state.Sort] or "QUALITY"
+    state.Sort=({QUALITY="RARITY",RARITY="PRICE",PRICE="REFERENCE",REFERENCE="NAME",NAME="QUALITY"})[state.Sort] or "QUALITY"
     sortBtn.Text="SORT: "..state.Sort
     state.Dirty=true
 end)
@@ -1469,16 +1543,17 @@ local saleHeader=Instance.new("Frame",sale)
 saleHeader.Name="SaleTableHeader";saleHeader.BorderSizePixel=0
 saleHeader.BackgroundColor3=Color.Field
 saleHeader.Position=UDim2.new(.014,0,.142,0)
-saleHeader.Size=UDim2.new(.972,0,.056,0);saleHeader.ZIndex=22
+saleHeader.Size=UDim2.new(.972,-10,.056,0);saleHeader.ZIndex=22
 local saleRows=Instance.new("ScrollingFrame",sale)
 saleRows.Name="SaleRows";saleRows.BackgroundColor3=Color.Panel
 saleRows.BorderSizePixel=0;saleRows.Position=UDim2.new(.014,0,.204,0)
 saleRows.Size=UDim2.new(.972,0,.695,0);saleRows.ScrollBarThickness=7
 saleRows.CanvasSize=UDim2.fromOffset(0,0);saleRows.ZIndex=21
+saleRows.ScrollingDirection=Enum.ScrollingDirection.Y
 local saleLayout=Instance.new("UIListLayout",saleRows)
 saleLayout.Padding=UDim.new(0,5);saleLayout.SortOrder=Enum.SortOrder.LayoutOrder
 saleLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    if saleRows.Parent then saleRows.CanvasSize=UDim2.fromOffset(bulkBar.Visible and math.max(1500,saleRows.AbsoluteSize.X-12) or 0,saleLayout.AbsoluteContentSize.Y+8) end
+    if saleRows.Parent then saleRows.CanvasSize=UDim2.fromOffset(0,saleLayout.AbsoluteContentSize.Y+8) end
 end)
 local saleBusy=false;state.SaleBusy=false
 local saleStop=false
@@ -1488,10 +1563,10 @@ local bulkButtons={}
 local scrollInventoryCache={}
 local function writeSaleHeader(columns,scrollMode)
     bulkBar.Visible=scrollMode
-    saleHeader.Visible=not scrollMode
-    saleHeader.Position=UDim2.new(.014,0,scrollMode and .210 or .142,0)
-    saleRows.Position=UDim2.new(.014,0,scrollMode and .272 or .204,0)
-    saleRows.Size=UDim2.new(.972,0,scrollMode and .628 or .695,0)
+    saleHeader.Visible=true
+    saleHeader.Position=UDim2.new(.014,0,scrollMode and .267 or .142,0)
+    saleRows.Position=UDim2.new(.014,0,scrollMode and .327 or .204,0)
+    saleRows.Size=UDim2.new(.972,0,scrollMode and .573 or .695,0)
     for _,child in ipairs(saleHeader:GetChildren()) do child:Destroy() end
     for _,col in ipairs(columns) do
         local item=Instance.new("TextLabel",saleHeader)
@@ -1735,7 +1810,7 @@ local function refreshSale()
     for _,id in ipairs(ids) do
         local item=Instance.new("Frame",saleRows)
         item.Name="Ore_"..id;item.BackgroundColor3=Color.Field
-        item.BorderSizePixel=0;item.Size=UDim2.new(1,-10,0,78);item.ZIndex=22
+        item.BorderSizePixel=0;item.Size=UDim2.new(1,-10,0,48);item.ZIndex=22
         local mn=oreMin(id)
         local title=label(item,id.." | Túi: "..tostring(bag[id]).." | Min: "..tostring(mn or "N/A"),.012,.02,.34,.35,12,true)
         title.ZIndex=23
@@ -1856,20 +1931,39 @@ local function scanOwnedScrolls()
         end
         if not uuid and validScrollUUID(key) then uuid=key end
         if not uuid then unresolved=unresolved+1;return true end
-        if seen[uuid] then return true end
-        seen[uuid]=true
+        local previous=seen[uuid]
         local name=id and scrollName(id,raw) or "Scroll (chưa rõ loại)"
         local attrs,_,premium,_,goodSum=parseStats(raw)
         local def=id and index["Scroll\0"..id]
         local min=type(def)=="table" and intRange(def.MinPrice,1,1000000000) or nil
         local max=type(def)=="table" and intRange(def.MaxPrice,1,1000000000) or nil
         local quality=(#attrs==4 and premium<=4) and premium or nil
-        items[#items+1]={UUID=uuid,Id=id,Name=name,Attrs=attrs,
+        local record={UUID=uuid,Id=id,Name=name,Attrs=attrs,
             Rarity=parseRarity(raw),GoodSum=goodSum or 0,
             Min=min,Max=max,Premium=quality,Source=origin,
             Blocked=not def or raw.Tradeable==false or raw.Tradable==false
                 or raw.CanTrade==false or raw.Locked==true or raw.IsLocked==true
                 or raw.IsListed==true or raw.Listed==true}
+        if previous then
+            if previous.Id and record.Id and previous.Id~=record.Id then
+                previous.Rarity=nil;previous.RarityConflict=true;previous.Blocked=true
+                return true
+            end
+            if record.Rarity and not previous.RarityConflict then
+                if previous.Rarity and previous.Rarity~=record.Rarity then
+                    previous.Rarity=nil;previous.RarityConflict=true
+                else previous.Rarity=record.Rarity end
+            end
+            if record.Id and not previous.Id then
+                previous.Id=record.Id;previous.Name=record.Name;previous.Min=record.Min;previous.Max=record.Max
+            end
+            if #record.Attrs>#previous.Attrs then
+                previous.Attrs=record.Attrs;previous.Premium=record.Premium;previous.GoodSum=record.GoodSum
+            end
+            previous.Blocked=previous.Blocked or record.Blocked
+        else
+            items[#items+1]=record;seen[uuid]=record
+        end
         return true
     end
     for _,src in ipairs(sources) do
@@ -1904,7 +1998,7 @@ local function qualityPrice(record,multiplier)
 end
 -- STALL_V6_PRICE_END
 local function sameOwnedScroll(a,b)
-    return a.UUID==b.UUID and a.Id==b.Id and a.Premium==b.Premium and
+    return a.UUID==b.UUID and a.Id==b.Id and a.Premium==b.Premium and a.Rarity==b.Rarity and
         table.concat(a.Attrs,"|")==table.concat(b.Attrs,"|") and
         a.Min==b.Min and a.Max==b.Max and not b.Blocked
 end
@@ -1975,7 +2069,7 @@ function V6.Select(items,rarity,quality,multiplier,limit)
     local selected={}
     for _,record in ipairs(items) do
         local q=record.Premium
-        if (rarity=="ALL" or record.Rarity==rarity) and q~=nil
+        if (rarity=="ALL" or rarity=="UNKNOWN" and record.Rarity==nil or record.Rarity==rarity) and q~=nil
             and (quality=="ALL" or quality=="POOR" and q<=1 or q==quality)
             and not record.Blocked and not saleAttempted[record.UUID] then
             local price=qualityPrice(record,multiplier)
@@ -2062,10 +2156,6 @@ end
 refreshScrollSale=function()
     if saleBusy then saleMsg("Đang chờ xác nhận bán");return end
     saleTitle.Text="SELL SCROLL | 5 LOẠI CHỈ SỐ TỐT | TỐI ĐA 30 LISTING"
-    writeSaleHeader(SCROLL_COLUMNS,true)
-    saleHeader.Visible=false
-    saleRows.Position=UDim2.new(.014,0,.280,0)
-    saleRows.Size=UDim2.new(.972,0,.620,0)
     bulkPending=nil
     for _,child in ipairs(saleRows:GetChildren()) do
         if child:IsA("Frame") then child:Destroy() end
@@ -2073,66 +2163,76 @@ refreshScrollSale=function()
     local items,unresolved=scanOwnedScrolls()
     scrollInventoryCache=items
     local rarities={}
+    local unknown=0
     for id in pairs(rarityInfo) do rarities[id]=true end
-    for _,record in ipairs(items) do if record.Rarity then rarities[record.Rarity]=true end end
+    for _,record in ipairs(items) do
+        if record.Rarity then rarities[record.Rarity]=true else unknown=unknown+1 end
+    end
     local keys={}
     for id in pairs(rarities) do keys[#keys+1]=id end
-    table.sort(keys)
+    table.sort(keys,function(a,b)return a>b end)
     table.insert(keys,1,"ALL")
+    if unknown>0 then keys[#keys+1]="UNKNOWN" end
     for _,child in ipairs(rarityBar:GetChildren()) do child:Destroy() end
     for i,id in ipairs(keys) do
-        local title=id=="ALL" and "ALL" or rarityStyle(id)
+        local title=id=="ALL" and "ALL" or id=="UNKNOWN" and "CHƯA RÕ" or rarityStyle(id)
         local tab=sellButton(rarityBar,title,0,0,0,1,function()
             V6.Rarity=id;refreshScrollSale()
         end)
-        tab.Position=UDim2.fromOffset((i-1)*115,0);tab.Size=UDim2.new(0,110,1,-4)
+        tab.Position=UDim2.new((i-1)/#keys,0,0,0)
+        tab.Size=UDim2.new(1/#keys,-4,1,-3)
         tab.BackgroundColor3=V6.Rarity==id and Color.Green or Color.Blue
     end
-    rarityBar.CanvasSize=UDim2.fromOffset(#keys*115,0)
-    local width=math.max(1500,saleRows.AbsoluteSize.X-12)
-    V6.TableWidth=width
-    local columns={{"TÊN + ĐIỂM",0,.18},{"CHỈ SỐ 1",.18,.115},{"CHỈ SỐ 2",.295,.115},
-        {"CHỈ SỐ 3",.410,.115},{"CHỈ SỐ 4",.525,.115},{"MIN",.64,.06},
-        {"MIN ×1.5",.70,.06},{"MIN ×2",.76,.06},{"GIÁ TAY / BÁN",.82,.18}}
+    rarityBar.CanvasSize=UDim2.fromOffset(0,0)
+    local widths=state.FitColumns(items,saleRows.AbsoluteSize.X,true)
+    local titles={"TÊN + ĐIỂM","CHỈ SỐ 1","CHỈ SỐ 2","CHỈ SỐ 3","CHỈ SỐ 4","MIN","MIN ×1.5","MIN ×2","GIÁ TAY / BÁN"}
+    local columns,offsets={},{}
+    local x=0
+    for k,title in ipairs(titles) do
+        columns[k]={title,x,widths[k]};offsets[k]=x;x=x+widths[k]
+    end
+    writeSaleHeader(columns,true)
     local function cell(row,text,x,w,color)
         local item=label(row,text,x+.003,.05,w-.006,.90,11,true,true)
         item.Font=Enum.Font.GothamBold;item.TextColor3=color or Color.Text;item.ZIndex=23
         return item
     end
-    local head=Instance.new("Frame",saleRows)
-    head.Size=UDim2.fromOffset(width,32);head.LayoutOrder=0;head.ZIndex=22
-    head.BackgroundColor3=Color.Field;head.BorderSizePixel=0
-    for _,col in ipairs(columns) do cell(head,col[1],col[2],col[3]) end
     local visible=0
     for _,record in ipairs(items) do
-        if V6.Rarity=="ALL" or record.Rarity==V6.Rarity then
+        if V6.Rarity=="ALL" or V6.Rarity=="UNKNOWN" and record.Rarity==nil or record.Rarity==V6.Rarity then
             visible=visible+1
             local row=Instance.new("Frame",saleRows)
             row.BackgroundColor3=Color.Field;row.BorderSizePixel=0
-            row.Size=UDim2.fromOffset(width,76);row.LayoutOrder=visible;row.ZIndex=22
+            row.Size=UDim2.new(1,-10,0,40);row.LayoutOrder=visible;row.ZIndex=22
             local rarity,color=rarityStyle(record.Rarity)
             cell(row,record.Name.."\n"..rarity.." · "..tostring(record.Premium or "?").."/5",
-                0,.18,color)
+                0,widths[1],color)
             for k=1,4 do
                 local stat=record.Attrs[k] or "?"
-                cell(row,stat,.18+(k-1)*.115,.115,goodStatText(stat)
+                cell(row,stat,offsets[k+1],widths[k+1],goodStatText(stat)
                     and Color3.fromRGB(95,255,135) or Color3.fromRGB(205,210,220))
             end
             for k,mult in ipairs({1,1.5,2}) do
                 local price=qualityPrice(record,mult)
-                sellButton(row,price and tostring(price) or "N/A",.64+(k-1)*.06,.20,.057,.60,
+                sellButton(row,price and tostring(price) or "N/A",offsets[k+5]+.002,.20,widths[k+5]-.004,.60,
                     function()V6.Sell(record,price)end)
             end
-            local price=field(row,"Giá",.824,.20,.102,.60,record.Min and tostring(record.Min) or "")
+            local price=field(row,"Giá",offsets[9]+.003,.20,widths[9]*.59-.005,.60,record.Min and tostring(record.Min) or "")
             price.ZIndex=24
             sellButton(row,record.Blocked and "KHÓA" or saleAttempted[record.UUID] and "ĐÃ GỬI" or "BÁN",
-                .930,.20,.065,.60,function()V6.Sell(record,tonumber(price.Text))end)
+                offsets[9]+widths[9]*.60,.20,widths[9]*.40-.004,.60,function()V6.Sell(record,tonumber(price.Text))end)
         end
     end
-    saleRows.CanvasSize=UDim2.fromOffset(width,saleLayout.AbsoluteContentSize.Y+8)
+    saleRows.CanvasSize=UDim2.fromOffset(0,saleLayout.AbsoluteContentSize.Y+8)
     updateBulkButtons()
-    saleMsg("Hiện "..visible.."/"..#items.." Scroll; "..unresolved.." thiếu UUID. Điểm tốt /5, giảm dần.")
+    saleMsg("Hiện "..visible.."/"..#items.." Scroll; "..unresolved.." thiếu UUID; "..unknown.." chưa rõ rarity.")
 end
+-- STALL_V61_RESIZE_BEGIN
+state.Conn[#state.Conn+1]=panel:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+    state.Dirty=true
+    state.SellResize=true
+end)
+-- STALL_V61_RESIZE_END
 -- CLONE_SHARD_TAB_BEGIN: four independent clone targets, one chosen owned Ore.
 -- No client-side purchases or automatic shard transfers. Seller manually lists
 -- exact-price stacks; a buyer still needs to purchase them in the game.
@@ -2526,14 +2626,15 @@ end,Color.Green)
                             local id=getListingId(row,itemId)
                             assert(type(id)=="string" and #id>0 and #id<=128,
                                 "Ore khớp giá nhưng thiếu ListingID")
-                            matches[#matches+1]={Id=id,Item=itemId,Price=price}
+                            if not lastSent[tostring(ownerId).."|"..id] then
+                                matches[#matches+1]={Id=id,Item=itemId,Price=price}
+                            end
                         end
                     end
                 end
-                assert(#matches==1,#matches==0 and
-                    "Không có Ore đúng "..balance.." Shards"
-                    or "Nhiều Ore khớp giá; không mua nhầm")
-                local listing=matches[1]
+                assert(#matches>0,"Không có Ore chưa gửi mua đúng "..balance.." Shards")
+                table.sort(matches,function(a,b)return a.Id<b.Id end)
+                local listing=matches[(LocalPlayer.UserId%#matches)+1]
                 local confirmed,whyConfirm=exactBalance()
                 assert(confirmed==balance,
                     whyConfirm or "Số dư Origin Shard đã thay đổi")
@@ -2652,6 +2753,11 @@ task.spawn(function()
                 state.PendingPurchase=nil
                 state.Dirty=true
                 say("Hết hạn xác nhận mua. Hãy bấm MUA để kiểm tra lại listing.")
+            end
+            if state.SellResize and not saleBusy and sale.Visible and bulkBar.Visible then
+                state.SellResize=false
+                local ok,err=pcall(refreshScrollSale)
+                if not ok then warn("[SCROLL_MARKET] resize error: "..tostring(err)) end
             end
             if state.Dirty and os.clock()-state.LastRender>=.9 then
                 local ok,err=pcall(render)
