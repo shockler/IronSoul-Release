@@ -1,4 +1,4 @@
--- IRON SOUL DUNGEON | STALL MARKET v6.2 | nine-column scanner + Ore listing UI + TP + reversible low-FX
+-- IRON SOUL DUNGEON | STALL MARKET v6.3 | nine-column scanner + Ore listing UI + TP + reversible low-FX
 -- Source evidence: BoothController:GetAllStalls(), BoothRE:RequestBoothShows,
 -- BoothRE events BoothShows/BoothShowUpdate/StallView/StallRefresh.
 -- SCAN/DEEP SCAN are read-only. Purchase occurs ONLY after explicit two-step
@@ -923,12 +923,17 @@ minSize.MinSize=Vector2.new(0,0)
 function state.FitColumns(rows,viewport,sell)
     local width=math.max(1,viewport or 1)
     local longestName,longestOwner=0,0
+    local measurements={}
     local function measure(text)
+        text=tostring(text or "")
+        if measurements[text] then return measurements[text] end
         local ok,size=pcall(function()
             return game:GetService("TextService"):GetTextSize(tostring(text or ""),11,
                 Enum.Font.GothamBold,Vector2.new(10000,1000))
         end)
-        return ok and size.X or #tostring(text or "")*7
+        local result=ok and size.X or #text*7
+        measurements[text]=result
+        return result
     end
     for _,r in ipairs(rows) do
         longestName=math.max(longestName,measure(r.Name))
@@ -1044,7 +1049,7 @@ end
 local search=field(panel,"Tên Scroll / Skill / chỉ số / người bán",.014,.092,.37,.050,"")
 local minPrice=field(panel,"Min $",.392,.092,.14,.050,"")
 local maxPrice=field(panel,"Max $",.541,.092,.14,.050,"")
-label(panel,"STALL MARKET v6.2 | SCAN / MUA / BÁN ORE + SCROLL",.014,.018,.72,.058,15,true)
+label(panel,"STALL MARKET v6.3 | SCAN / MUA / BÁN ORE + SCROLL",.014,.018,.72,.058,15,true)
 button(panel,"H ẨN",.825,.017,.081,.055,function()panel.Visible=false end)
 button(panel,"X",.915,.017,.070,.055,function() state.Stop() end,Color.Red)
 local list=Instance.new("ScrollingFrame",panel)
@@ -1558,7 +1563,7 @@ saleRows.ScrollingDirection=Enum.ScrollingDirection.Y
 local saleLayout=Instance.new("UIListLayout",saleRows)
 saleLayout.Padding=UDim.new(0,5);saleLayout.SortOrder=Enum.SortOrder.LayoutOrder
 saleLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-    if saleRows.Parent then saleRows.CanvasSize=UDim2.fromOffset(0,saleLayout.AbsoluteContentSize.Y+8) end
+    if saleRows.Parent and not bulkBar.Visible then saleRows.CanvasSize=UDim2.fromOffset(0,saleLayout.AbsoluteContentSize.Y+8) end
 end)
 local saleBusy=false;state.SaleBusy=false
 local saleStop=false
@@ -1803,7 +1808,10 @@ local function refreshSale()
     if saleBusy then saleMsg("Đang gửi; chờ xong mới quét lại.");return end
     saleTitle.Text="BÁN ORE | ListStack | Giá Min game"
     bulkPending=nil
+    if state.ScrollWindowClear then state.ScrollWindowClear() end
     writeSaleHeader(ORE_COLUMNS,false)
+    saleLayout.Parent=saleRows
+    saleRows.CanvasPosition=Vector2.zero
     local bag,err=oreBag()
     if not bag then saleMsg(err);return end
     for _,c in ipairs(saleRows:GetChildren()) do if c:IsA("Frame") then c:Destroy() end end
@@ -1884,6 +1892,8 @@ local function scrollResource(v)
 end
 local function scanOwnedScrolls()
     local items,seen,unresolved,diagnostics,sources={},{},0,{},{}
+    local definitions={}
+    local names={}
     local function source(name,ok,val)
         local found=ok and type(val)=="table"
         diagnostics[#diagnostics+1]=name..":"..(found and "OK" or "N/A")
@@ -1953,20 +1963,25 @@ local function scanOwnedScrolls()
         if not uuid and validScrollUUID(key) then uuid=key end
         if not uuid then unresolved=unresolved+1;return true end
         local previous=seen[uuid]
-        local name=id and scrollName(id,raw) or "Scroll (chưa rõ loại)"
+        local name=id and names[id]
+        if not name then
+            name=id and scrollName(id,raw) or "Scroll (chưa rõ loại)"
+            if id then names[id]=name end
+        end
         local attrs,_,premium,_,goodSum=parseStats(raw)
         local def=id and index["Scroll\0"..id]
         local min=type(def)=="table" and intRange(def.MinPrice,1,1000000000) or nil
         local max=type(def)=="table" and intRange(def.MaxPrice,1,1000000000) or nil
-        local scrollDef=nil
-        if id and type(ScrollUtil)=="table" and type(ScrollUtil.GetDef)=="function" then
+        local scrollDef=id and definitions[id]
+        if scrollDef==nil and id and type(ScrollUtil)=="table" and type(ScrollUtil.GetDef)=="function" then
             local ok,v=pcall(function()return ScrollUtil:GetDef(id)end)
             if ok and type(v)=="table" then scrollDef=v end
         end
-        if not scrollDef and id and type(ScrollDefinitions)=="table" then
+        if scrollDef==nil and id and type(ScrollDefinitions)=="table" then
             scrollDef=ScrollDefinitions[id]
         end
         if type(scrollDef)~="table" or (scrollDef.ID and scrollDef.ID~=id) then scrollDef=nil end
+        if id then definitions[id]=scrollDef or false end
         local rarity=scrollDef and parseRarity(scrollDef) or nil
         if rarity==nil and not nativeOwned then rarity=parseRarity(raw) end
         local quality=(#attrs>=1 and #attrs<=4 and premium<=4 and (#attrs==4 or rarity~=nil)) and premium or nil
@@ -2040,7 +2055,20 @@ local function sameOwnedScroll(a,b)
         table.concat(a.Attrs,"|")==table.concat(b.Attrs,"|") and
         a.Min==b.Min and a.Max==b.Max and not b.Blocked
 end
+-- Fast path uses the actual native UUID API; nil/error is never proof of removal.
 local function liveOwnedScroll(record)
+    if type(ScrollUtil)=="table" and type(ScrollUtil.GetOwnedScrollData)=="function" then
+        local ok,raw=pcall(function()return ScrollUtil:GetOwnedScrollData(LocalPlayer,record.UUID)end)
+        if not ok or type(raw)~="table" or raw.UUID~=record.UUID or raw.Id~=record.Id then return false end
+        if raw.Tradeable==false or raw.Tradable==false or raw.CanTrade==false
+            or raw.Locked==true or raw.IsLocked==true or raw.IsListed==true or raw.Listed==true then return false end
+        local okDef,def=pcall(function()return ScrollUtil:GetDef(record.Id)end)
+        if not okDef or type(def)~="table" or def.CanTrade==false or parseRarity(def)~=record.Rarity then return false end
+        local market=index["Scroll\0"..record.Id]
+        if not market or market.MinPrice~=record.Min or market.MaxPrice~=record.Max then return false end
+        local attrs,_,premium=parseStats(raw)
+        return premium==record.Premium and table.concat(attrs,"|")==table.concat(record.Attrs,"|")
+    end
     local current=scanOwnedScrolls()
     for _,item in ipairs(current) do
         if sameOwnedScroll(record,item) then return true end
@@ -2055,6 +2083,13 @@ local function sendScrollList(record,price)
     end
     return SaleGuard.Send("Scroll",record.Id,1,price,function(confirm)
         if confirm then
+            if type(ScrollUtil)=="table" and type(ScrollUtil.GetOwnedScrollData)=="function" then
+                local ok,raw=pcall(function()return ScrollUtil:GetOwnedScrollData(LocalPlayer,record.UUID)end)
+                if not ok or raw~=nil then return false end
+                -- Ensure profile is readable: GetAllOwned may return {} when not ready.
+                local okBag,bag=pcall(function()return ScrollUtil:GetAllOwned(LocalPlayer)end)
+                if okBag and type(bag)=="table" and next(bag)~=nil then return bag[record.UUID]==nil end
+            end
             local items,unresolved,diagnostics=scanOwnedScrolls()
             if unresolved>0 or not diagnostics:find(":OK",1,true) then return false end
             for _,item in ipairs(items) do if item.UUID==record.UUID then return false end end
@@ -2067,7 +2102,7 @@ local function sendScrollList(record,price)
 end
 local updateBulkButtons
 local refreshScrollSale
-local V6={Rarity="ALL",Quality="POOR",Multiplier=1,Quantity=1,Tabs={}}
+local V6={Rarity="ALL",Quality="POOR",Multiplier=1,Quantity=1,Tabs={},Drafts={},Mounted={}}
 bulkBar.Size=UDim2.new(.972,0,.125,0)
 local rarityBar=Instance.new("ScrollingFrame",bulkBar)
 rarityBar.BackgroundTransparency=1;rarityBar.BorderSizePixel=0
@@ -2191,15 +2226,22 @@ function V6.Sell(record,price)
         saleMsg(ok and ("Đã xác nhận bán "..record.Name.." giá "..price) or tostring(err))
     end)
 end
-refreshScrollSale=function()
+refreshScrollSale=function(useCache)
     if saleBusy then saleMsg("Đang chờ xác nhận bán");return end
     saleTitle.Text="SELL SCROLL | 5 LOẠI CHỈ SỐ TỐT | TỐI ĐA 30 LISTING"
     bulkPending=nil
+    if state.ScrollWindowClear then state.ScrollWindowClear() end
     for _,child in ipairs(saleRows:GetChildren()) do
         if child:IsA("Frame") then child:Destroy() end
     end
-    local items,unresolved=scanOwnedScrolls()
-    scrollInventoryCache=items
+    local items,unresolved
+    if useCache==true and V6.CacheReady then
+        items,unresolved=V6.CachedItems,V6.Unresolved
+    else
+        items,unresolved=scanOwnedScrolls()
+        V6.CachedItems=items;V6.Unresolved=unresolved;V6.CacheReady=true
+        V6.ScanAt=os.clock()
+    end
     local rarities={}
     local unknown=0
     for id in pairs(rarityInfo) do rarities[id]=true end
@@ -2216,7 +2258,7 @@ refreshScrollSale=function()
     for i,id in ipairs(keys) do
         local title=id=="ALL" and "ALL" or id=="UNKNOWN" and "CHƯA RÕ" or rarityStyle(id)
         local tab=sellButton(rarityBar,title,0,0,0,1,function()
-            V6.Rarity=id;refreshScrollSale()
+            V6.Rarity=id;refreshScrollSale(true)
         end)
         tab.Position=UDim2.new((i-1)/#keys,0,0,0)
         tab.Size=UDim2.new(1/#keys,-4,1,-3)
@@ -2236,13 +2278,17 @@ refreshScrollSale=function()
         item.Font=Enum.Font.GothamBold;item.TextColor3=color or Color.Text;item.ZIndex=23
         return item
     end
-    local visible=0
+    local filtered={}
     for _,record in ipairs(items) do
         if V6.Rarity=="ALL" or V6.Rarity=="UNKNOWN" and record.Rarity==nil or record.Rarity==V6.Rarity then
-            visible=visible+1
+            filtered[#filtered+1]=record
+        end
+    end
+    local function mount(record,visible)
             local row=Instance.new("Frame",saleRows)
             row.BackgroundColor3=Color.Field;row.BorderSizePixel=0
             row.Size=UDim2.new(1,-10,0,40);row.LayoutOrder=visible;row.ZIndex=22
+            row.Position=UDim2.fromOffset(0,(visible-1)*45)
             local rarity,color=rarityStyle(record.Rarity)
             cell(row,record.Name.."\n"..rarity.." · "..tostring(record.Premium or "?").."/5",
                 0,widths[1],color)
@@ -2256,15 +2302,46 @@ refreshScrollSale=function()
                 sellButton(row,price and tostring(price) or "N/A",offsets[k+5]+.002,.20,widths[k+5]-.004,.60,
                     function()V6.Sell(record,price)end)
             end
-            local price=field(row,"Giá",offsets[9]+.003,.20,widths[9]*.59-.005,.60,record.Min and tostring(record.Min) or "")
+            local price=field(row,"Giá",offsets[9]+.003,.20,widths[9]*.59-.005,.60,V6.Drafts[record.UUID] or (record.Min and tostring(record.Min) or ""))
             price.ZIndex=24
             sellButton(row,record.Blocked and "KHÓA" or saleAttempted[record.UUID] and "ĐÃ GỬI" or "BÁN",
                 offsets[9]+widths[9]*.60,.20,widths[9]*.40-.004,.60,function()V6.Sell(record,tonumber(price.Text))end)
+            return {Frame=row,Price=price,UUID=record.UUID}
+    end
+    -- Keep only visible rows plus a small buffer. Unchanged rows are retained.
+    -- Each row closure binds exactly one UUID; never retarget a live sell button.
+    local function unmount(i)
+        local entry=V6.Mounted[i]
+        if entry then
+            V6.Drafts[entry.UUID]=entry.Price.Text
+            entry.Frame:Destroy()
+            V6.Mounted[i]=nil
         end
     end
-    saleRows.CanvasSize=UDim2.fromOffset(0,saleLayout.AbsoluteContentSize.Y+8)
+    state.ScrollWindowClear=function()
+        for i in pairs(V6.Mounted) do unmount(i) end
+        state.ScrollWindowUpdate=nil
+    end
+    saleLayout.Parent=nil
+    saleRows.CanvasPosition=Vector2 and Vector2.zero or {Y=0}
+    saleRows.CanvasSize=UDim2.fromOffset(0,#filtered*45+8)
+    state.ScrollWindowUpdate=function()
+        local y=saleRows.CanvasPosition and saleRows.CanvasPosition.Y or 0
+        local h=saleRows.AbsoluteSize.Y or 500
+        local first=math.max(1,math.floor(y/45)+1-3)
+        local last=math.min(#filtered,math.ceil((y+h)/45)+3)
+        for i in pairs(V6.Mounted) do
+            if i<first or i>last then unmount(i) end
+        end
+        for i=first,last do
+            if not V6.Mounted[i] then V6.Mounted[i]=mount(filtered[i],i) end
+        end
+        state.VisibleScrollRows=math.max(0,last-first+1)
+        state.TotalScrollRows=#filtered
+    end
+    state.ScrollWindowUpdate()
     updateBulkButtons()
-    saleMsg("Hiện "..visible.."/"..#items.." Scroll; "..unresolved.." thiếu UUID; "..unknown.." chưa rõ rarity." )
+    saleMsg("Hiện "..#filtered.."/"..#items.." Scroll; "..unresolved.." thiếu UUID; "..unknown.." chưa rõ rarity." )
     if unknown>0 then print("[STALL_V62_RARITY] "..unknown.." instance(s) lack verified Scroll definition rarity.") end
 end
 -- STALL_V61_RESIZE_BEGIN
@@ -2273,6 +2350,9 @@ state.Conn[#state.Conn+1]=panel:GetPropertyChangedSignal("AbsoluteSize"):Connect
     state.SellResize=true
 end)
 -- STALL_V61_RESIZE_END
+state.Conn[#state.Conn+1]=saleRows:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+    if state.Alive and state.ScrollWindowUpdate and sale.Visible and panel.Visible then state.ScrollWindowUpdate() end
+end)
 -- CLONE_SHARD_TAB_BEGIN: four independent clone targets, one chosen owned Ore.
 -- No client-side purchases or automatic shard transfers. Seller manually lists
 -- exact-price stacks; a buyer still needs to purchase them in the game.
@@ -2779,6 +2859,9 @@ end)
 function state.Stop()
     state.Alive=false;state.Cancel=true;state.PendingPurchase=nil
     saleStop=true
+    if state.ScrollWindowClear then state.ScrollWindowClear() end
+    if not saleLayout.Parent then saleLayout:Destroy() end
+    state.ScrollWindowClear=nil;state.ScrollWindowUpdate=nil
     setHidePlayers(false)
     setLowFX(false)
     for _,c in ipairs(state.Conn) do pcall(function()c:Disconnect()end) end
@@ -2795,12 +2878,12 @@ task.spawn(function()
                 state.Dirty=true
                 say("Hết hạn xác nhận mua. Hãy bấm MUA để kiểm tra lại listing.")
             end
-            if state.SellResize and not saleBusy and sale.Visible and bulkBar.Visible then
+            if state.SellResize and not saleBusy and panel.Visible and sale.Visible and bulkBar.Visible then
                 state.SellResize=false
-                local ok,err=pcall(refreshScrollSale)
+                local ok,err=pcall(refreshScrollSale,true)
                 if not ok then warn("[SCROLL_MARKET] resize error: "..tostring(err)) end
             end
-            if state.Dirty and os.clock()-state.LastRender>=.9 then
+            if state.Dirty and panel.Visible and not sale.Visible and not clone.Visible and os.clock()-state.LastRender>=.9 then
                 local ok,err=pcall(render)
                 if not ok then warn("[SCROLL_MARKET] UI error: "..tostring(err)) end
             end
