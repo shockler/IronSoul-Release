@@ -232,14 +232,14 @@ local function parseRarity(v)
     if type(v)~="table" then return nil end
     for _,key in ipairs({"Rarity","RarityID","RarityId","RarityLevel","ScrollRarity","ItemRarity","Grade","Quality"}) do
         local value=v[key]
-        if type(value)=="number" and value%1==0 then return value end
+        if type(value)=="number" and value%1==0 and value>=1 and value<=7 then return value end
         if type(value)=="string" then
             for id,info in pairs(rarityInfo) do
                 if tostring(info.Name):lower()==value:lower() then return id end
             end
             if value:lower()=="mythic" then return 6 end
             local num=tonumber(value)
-            if num and num%1==0 then return num end
+            if num and num%1==0 and num>=1 and num<=7 then return num end
         end
     end
     -- Explicit rolled instance metadata only, never infer from stat count.
@@ -267,15 +267,20 @@ pcall(function()
     for key,def in pairs(type(defs)=="table" and defs or {}) do
         if type(def)=="table" then
             local id=tonumber(def.Id or key)
-            if id then rarityInfo[id]={Name=def.DisplayName or def.Name or tostring(id),
-                Color=def.Color or def.TextColor} end
+            if id and rarityInfo[id] then
+                local nativeName=def.Name or def.DisplayName
+                if type(nativeName)=="string" and not nativeName:match("^K_") and not tonumber(nativeName) then
+                    rarityInfo[id].Name=nativeName
+                end
+                rarityInfo[id].Color=def.Color or def.TextColor
+            end
         end
     end
 end)
 pcall(function()
     local module=RS.Enum:FindFirstChild("Rarity")
     for name,id in pairs(module and require(module) or {}) do
-        if type(id)=="number" then
+        if type(id)=="number" and id>=1 and id<=7 and id%1==0 and type(name)=="string" then
             rarityInfo[id]=rarityInfo[id] or {Name=tostring(name)}
         end
     end
@@ -1896,6 +1901,12 @@ local function scanOwnedScrolls()
         end
     else diagnostics[#diagnostics+1]="ScrollUtil:MISSING" end
     if dataUtil then
+        local okData,playerData=pcall(function()return dataUtil:GetPlayerData(LocalPlayer)end)
+        if okData and type(playerData)=="table" then
+            for _,key in ipairs({"Scrolls","Scroll","OwnedScrolls","ScrollInventory"}) do
+                if type(playerData[key])=="table" then source("GetPlayerData."..key,true,playerData[key]) end
+            end
+        end
         local paths={{"Scrolls","Owned"},{"Scroll","Owned"},
             {"OwnedScrolls"},{"Scrolls"},{"ScrollInventory"}}
         local ok,k=pcall(function()
@@ -1937,13 +1948,14 @@ local function scanOwnedScrolls()
         local def=id and index["Scroll\0"..id]
         local min=type(def)=="table" and intRange(def.MinPrice,1,1000000000) or nil
         local max=type(def)=="table" and intRange(def.MaxPrice,1,1000000000) or nil
-        local quality=(#attrs==4 and premium<=4) and premium or nil
+        local rarity=parseRarity(raw)
+        local quality=(#attrs>=1 and #attrs<=4 and premium<=4 and (#attrs==4 or rarity~=nil)) and premium or nil
+        local explicitBlocked=raw.Tradeable==false or raw.Tradable==false or raw.CanTrade==false
+            or raw.Locked==true or raw.IsLocked==true or raw.IsListed==true or raw.Listed==true
         local record={UUID=uuid,Id=id,Name=name,Attrs=attrs,
-            Rarity=parseRarity(raw),GoodSum=goodSum or 0,
+            Rarity=rarity,GoodSum=goodSum or 0,
             Min=min,Max=max,Premium=quality,Source=origin,
-            Blocked=not def or raw.Tradeable==false or raw.Tradable==false
-                or raw.CanTrade==false or raw.Locked==true or raw.IsLocked==true
-                or raw.IsListed==true or raw.Listed==true}
+            Blocked=not def or explicitBlocked,ExplicitBlocked=explicitBlocked}
         if previous then
             if previous.Id and record.Id and previous.Id~=record.Id then
                 previous.Rarity=nil;previous.RarityConflict=true;previous.Blocked=true
@@ -1951,7 +1963,7 @@ local function scanOwnedScrolls()
             end
             if record.Rarity and not previous.RarityConflict then
                 if previous.Rarity and previous.Rarity~=record.Rarity then
-                    previous.Rarity=nil;previous.RarityConflict=true
+                    previous.Rarity=nil;previous.RarityConflict=true;previous.Blocked=true
                 else previous.Rarity=record.Rarity end
             end
             if record.Id and not previous.Id then
@@ -1960,7 +1972,13 @@ local function scanOwnedScrolls()
             if #record.Attrs>#previous.Attrs then
                 previous.Attrs=record.Attrs;previous.Premium=record.Premium;previous.GoodSum=record.GoodSum
             end
-            previous.Blocked=previous.Blocked or record.Blocked
+            previous.ExplicitBlocked=previous.ExplicitBlocked or record.ExplicitBlocked
+            previous.Blocked=previous.RarityConflict or previous.ExplicitBlocked or not previous.Min or not previous.Max
+            if previous.Premium==nil and previous.Rarity and #previous.Attrs>=1 and #previous.Attrs<=4 then
+                -- Do not invent a score from missing attribute data. A richer
+                -- record with a parsed score can safely supply it.
+                if record.Premium~=nil and #record.Attrs==#previous.Attrs and table.concat(record.Attrs,"|")==table.concat(previous.Attrs,"|") then previous.Premium=record.Premium end
+            end
         else
             items[#items+1]=record;seen[uuid]=record
         end
@@ -2172,7 +2190,8 @@ refreshScrollSale=function()
     for id in pairs(rarities) do keys[#keys+1]=id end
     table.sort(keys,function(a,b)return a>b end)
     table.insert(keys,1,"ALL")
-    if unknown>0 then keys[#keys+1]="UNKNOWN" end
+    if unknown>0 then keys[#keys+1]="UNKNOWN"
+    elseif V6.Rarity=="UNKNOWN" then V6.Rarity="ALL" end
     for _,child in ipairs(rarityBar:GetChildren()) do child:Destroy() end
     for i,id in ipairs(keys) do
         local title=id=="ALL" and "ALL" or id=="UNKNOWN" and "CHƯA RÕ" or rarityStyle(id)
@@ -2225,7 +2244,8 @@ refreshScrollSale=function()
     end
     saleRows.CanvasSize=UDim2.fromOffset(0,saleLayout.AbsoluteContentSize.Y+8)
     updateBulkButtons()
-    saleMsg("Hiện "..visible.."/"..#items.." Scroll; "..unresolved.." thiếu UUID; "..unknown.." chưa rõ rarity.")
+    saleMsg("Hiện "..visible.."/"..#items.." Scroll; "..unresolved.." thiếu UUID; "..unknown.." chưa rõ rarity." )
+    if unknown>0 then print("[STALL_V61_RARITY] "..unknown.." instance(s) lack verified rolled rarity; native ScrollUtil source needed.") end
 end
 -- STALL_V61_RESIZE_BEGIN
 state.Conn[#state.Conn+1]=panel:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
@@ -2615,7 +2635,7 @@ end,Color.Green)
                     "Không xác minh được chủ quầy trong StallView")
                 assert(type(detail.Items)=="table",
                     "StallView không có Items hợp lệ")
-                local matches={}
+                local matches,seenListings={},{}
                 for _,row in pairs(detail.Items) do
                     if type(row)=="table" then
                         local typ=str(row,"ItemType","Type","Category")
@@ -2626,7 +2646,8 @@ end,Color.Green)
                             local id=getListingId(row,itemId)
                             assert(type(id)=="string" and #id>0 and #id<=128,
                                 "Ore khớp giá nhưng thiếu ListingID")
-                            if not lastSent[tostring(ownerId).."|"..id] then
+                            if not lastSent[tostring(ownerId).."|"..id] and not seenListings[id] then
+                                seenListings[id]=true
                                 matches[#matches+1]={Id=id,Item=itemId,Price=price}
                             end
                         end
