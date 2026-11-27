@@ -193,6 +193,47 @@ owned[#owned+1]={UUID=owned[1].UUID,ItemId=owned[1].ItemId,Rarity=6}
 assert(scan()[1].Rarity==6,"explicit rarity from later matching UUID is not lost")
 table.remove(owned)
 owned[1].Rarity=original
+-- Actual game ScrollUtil stores only Id, UUID, Attrs; Rarity comes from GetDef.
+do
+    local ids={"Scroll_Gun_2","Scroll_Gun_3","Scroll_Sickle_3","Scroll_Sword_1","Scroll_JacksWrath_1"}
+    local ranks={6,5,4,3,7}
+    local bag,defs,registry={}, {}, {}
+    local who={UserId=7}
+    for i,id in ipairs(ids) do
+        local uuid="native-scroll-uuid-000"..i
+        bag[uuid]={Id=id,UUID=uuid,Attrs={AttackBonus=10,HealthBonus=10}}
+        defs[id]={ID=id,Rarity=ranks[i],CanTrade=true}
+        registry["Scroll\0"..id]={MinPrice=10,MaxPrice=30}
+    end
+    -- Simulate an explicit non-tradeable config without assuming all Secret is blocked.
+    defs[ids[5]].CanTrade=false
+    local e={LocalPlayer=who,index=registry,intRange=intRange,scrollName=function(id)return id end,
+        parseStats=parse,parseRarity=function(raw)return raw.Rarity end,
+        ScrollDefinitions=defs,
+        ScrollUtil={
+            GetAllOwned=function(_,p)assert(p==who);return bag end,
+            GetDef=function(_,id)
+                if id==ids[4] then return nil end -- exact ResScrolls fallback
+                return defs[id]
+            end,
+            GetOwned=function()error("native path must not query legacy source")end
+        }}
+    local native=loadIn(section("local function validScrollUUID","-- STALL_V6_PRICE_BEGIN")
+        .."\nreturn scanOwnedScrolls",e)
+    local result,unresolved,diagnostics=native()
+    assert(#result==5 and unresolved==0 and diagnostics=="ScrollUtil.GetAllOwned:OK")
+    local byId={}
+    for _,v in ipairs(result) do byId[v.Id]=v end
+    for i,id in ipairs(ids)do assert(byId[id].Rarity==ranks[i],"definition rarity: "..id) end
+    assert(byId[ids[5]].Blocked and not byId[ids[1]].Blocked)
+    assert(byId[ids[1]].Premium==1 and byId[ids[3]].Premium==1)
+    local mythic=bulkEnv.V6.Select(result,6,"POOR",1,30)
+    assert(#mythic==1 and mythic[1].Record.Id==ids[1],"native inventory Mythic filter")
+    local legendary=bulkEnv.V6.Select(result,5,"POOR",1,30)
+    assert(#legendary==1 and legendary[1].Record.Id==ids[2],"native inventory Legendary filter")
+    assert(#bulkEnv.V6.Select(result,7,"ALL",1,30)==0,"explicit tradeability guard remains")
+    print("PASS V6.2 native owned map + definition rarity + exact rarity filters")
+end
 local sends=0
 local se={saleAttempted={},validScrollUUID=valid,scanOwnedScrolls=scan,intRange=intRange,
     SaleGuard={Send=function(kind,id,qty,price,check,uuid)

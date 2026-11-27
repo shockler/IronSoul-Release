@@ -7,6 +7,7 @@ on:
     paths:
       - Stall.lua
       - tests/stall_market_lite_mock.lua
+      - tests/stall_v6_mock.lua
       - .github/workflows/stall-market-lite.yml
   workflow_dispatch:
 permissions:
@@ -31,5 +32,7 @@ jobs:
           lua5.4 tests/stall_market_lite_mock.lua
       - name: Existing Clone shard planner regression
         run: lua5.4 tests/clone_shard_planner.lua
+      - name: Stall V6 native inventory, listing and UI regression
+        run: lua5.4 tests/stall_v6_mock.lua
       - name: No AIO or Stable changes
         run: echo 'Only Stall.lua release standalone; no AIO DEV or Stable.'
