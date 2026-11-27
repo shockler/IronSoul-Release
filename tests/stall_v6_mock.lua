@@ -107,6 +107,10 @@ local function case(opt)
                 local uuid="new"..dispatch
                 listed[uuid]={ListingId=uuid,ItemType=typ,ItemID=id,Quantity=qty,Price=price}
                 if not opt.staleStock then stock=stock-qty end
+                if opt.eventAck then
+                    st.OwnSaleSeq=(st.OwnSaleSeq or 0)+1
+                    st.OwnSaleEvent={Slot=1,Seq=st.OwnSaleSeq,Data={OwnerUserId=opt.badEventOwner and 999 or 7,Items=opt.partialEvent and {[uuid]=listed[uuid]} or listed}}
+                end
             end
         else error("unexpected "..action) end
     end
@@ -124,6 +128,14 @@ assert(g.Ore("OreA",2,30))
 assert(g.Free()==0)
 assert(not g.Ore("OreA",2,30))
 assert(count()==1,"30-slot ceiling across sends")
+local eg,ee,ec=case({count=2,eventAck=true})
+assert(eg.Ore("OreA",2,30) and ec()==1)
+assert(ee.state.SaleRemoteCount==3,"complete fresh event avoids post-sale remote snapshots")
+for _,opt in ipairs({{count=2,eventAck=true,partialEvent=true},{count=2,eventAck=true,badEventOwner=true}}) do
+    local guard,env,calls=case(opt)
+    assert(guard.Ore("OreA",2,30) and calls()==1)
+    assert(env.state.SaleRemoteCount==5,"partial/wrong-owner event falls back to verified snapshot")
+end
 local repeatGuard,repeatEnv,repeatCount=case()
 assert(repeatGuard.Ore("OreA",2,30))
 assert(repeatGuard.Ore("OreA",2,30))
@@ -251,6 +263,31 @@ assert(not sendScroll(records[1],9) and not sendScroll(records[1],31),"manual le
 assert(sendScroll(records[1],15))
 assert(not sendScroll(records[1],15) and sends==1,"UUID one shot")
 print("PASS V6 Scroll: real inventory scorer/sort, tradeability, equipped allowed, duplicate UUID, manual bounds, removal ACK")
+do
+    local id,uuid="Scroll_Gun_2","native-scroll-uuid-0001"
+    local raw={Id=id,UUID=uuid,Attrs={AttackBonus=10,HealthBonus=20}}
+    local bag={[uuid]=raw,other={}}
+    local attrs,_,quality=parse(raw)
+    local rec={Id=id,UUID=uuid,Attrs=attrs,Premium=quality,Rarity=6,Min=10,Max=30}
+    local calls=0
+    local fast={LocalPlayer={},saleAttempted={},validScrollUUID=valid,intRange=intRange,parseStats=parse,
+        parseRarity=function(r)return r.Rarity end,index={["Scroll\0"..id]={MinPrice=10,MaxPrice=30}},
+        scanOwnedScrolls=function()error("must not rescan entire bag on native UUID path")end,
+        ScrollUtil={GetOwnedScrollData=function(_,p,k)calls=calls+1;return bag[k] end,
+            GetAllOwned=function()return bag end,GetDef=function()return {Rarity=6,CanTrade=true} end}}
+    local live=loadIn(section("local function sameOwnedScroll","local updateBulkButtons").."\nreturn liveOwnedScroll",fast)
+    assert(live(rec) and calls==1)
+    raw.Attrs.AttackBonus=11
+    assert(not live(rec),"changed stats reject stale selection")
+    raw.Attrs.AttackBonus=10
+    raw.Locked=true
+    assert(not live(rec),"locked item cannot pass direct UUID check")
+    raw.Locked=nil
+    bag[uuid]=nil
+    assert(not live(rec),"missing item cannot pass direct UUID check")
+    print("PASS V6.3 native UUID revalidation without full inventory parse")
+end
+
 
 do
     local nodes={}
@@ -269,11 +306,21 @@ do
         return obj
     end
     local rows=node("ScrollingFrame")
+    rows.AbsoluteSize.Y=450
     local bar=node("Frame")
+    local scans=0
+    local large=false
     local e={saleRows=rows,bulkBar=bar,saleTitle={},saleHeader={},SCROLL_COLUMNS={},
         saleLayout={AbsoluteContentSize={Y=500}},state={Alive=true,Conn={},FitColumns=fitEnv.state.FitColumns},saleBusy=false,
         saleAttempted={},intRange=intRange,qualityPrice=qualityPrice,rarityInfo={[5]={},[6]={},[7]={}},
-        scanOwnedScrolls=function()return {
+        scanOwnedScrolls=function()
+            scans=scans+1
+            if large then
+                local items={}
+                for i=1,266 do items[i]={UUID="ui-"..i,Name="Scroll "..i,Premium=1,GoodSum=10,Rarity=6,Min=10,Max=30,Attrs={"Skill CDR +10%"}} end
+                return items,0
+            end
+            return {
             {UUID="ui-a",Name="A",Premium=1,GoodSum=10,Rarity=6,Min=10,Max=30,
              Attrs={"Skill CDR +10%","Health Bonus +1%","Move Speed +1%","Dash CDR +1%"}},
             {UUID="ui-b",Name="B",Premium=0,GoodSum=0,Rarity=5,Min=10,Max=30,Attrs={}}
@@ -310,12 +357,30 @@ do
     assert(#tabs==4 and tabs[1].Text=="ALL","ALL plus every native rarity, including empty")
     tabs[3].Click()
     assert(#rows:GetChildren()==1,"rarity tab actually filters rows")
+    assert(scans==1,"rarity tabs filter the cache without scanning inventory")
     local maxButton
     for _,n in ipairs(nodes)do if n.Kind=="TextButton" and n.Text=="MAX" then maxButton=n end end
     maxButton.Click()
     local quantity
     for _,n in ipairs(bar:GetChildren())do if n.Kind=="TextBox" then quantity=n end end
     assert(quantity.Text=="1","MAX obeys current eligible items and verified free slots")
+    large=true
+    refresh()
+    assert(e.state.TotalScrollRows==266 and #rows:GetChildren()<=17,"only viewport plus buffer mounted")
+    local first=rows:GetChildren()[1]
+    local input=first:GetChildren()[9]
+    input.Text="19"
+    rows.CanvasPosition={Y=45*120}
+    e.state.ScrollWindowUpdate()
+    assert(#rows:GetChildren()<=17,"bounded rows after scrolling")
+    rows.CanvasPosition={Y=0}
+    e.state.ScrollWindowUpdate()
+    local found=false
+    for _,r in ipairs(rows:GetChildren()) do
+        if r.LayoutOrder==1 then found=true;assert(r:GetChildren()[9].Text=="19","manual price bound to UUID survives scrolling") end
+    end
+    assert(found)
+    assert(rows.CanvasSize[2]==266*45+8,"full virtual scroll extent")
     print("PASS V6.1 UI: nine columns, responsive width, rarity tabs, bold stat colors, quick prices, MAX")
 end
 
