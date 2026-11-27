@@ -1566,7 +1566,7 @@ sale.Position=UDim2.new(.008,0,.076,0);sale.Size=UDim2.new(.984,0,.906,0)
 sale.ZIndex=20
 local saleTitle=label(sale,"BÁN ORE / SCROLL | Remote Booth",.018,.008,.70,.055,17,true)
 saleTitle.ZIndex=21
-local saleStatus=label(sale,"Chọn QUÉT ORE hoặc QUÉT SCROLL. Scroll cần có UUID riêng.",.018,.912,.95,.066,12,false,true)
+local saleStatus=label(sale,"Chọn QUÉT ORE hoặc QUÉT SCROLL. Scroll cần có UUID riêng.",.018,.912,.72,.066,12,false,true)
 saleStatus.ZIndex=21
 local bulkBar=Instance.new("Frame",sale)
 bulkBar.Name="QualityBulkBar";bulkBar.BackgroundTransparency=1
@@ -1593,8 +1593,8 @@ local saleStop=false
 local saleAttempted={}
 local bulkPending=nil
 local bulkButtons={}
-local scrollInventoryCache={}
 local function writeSaleHeader(columns,scrollMode)
+    state.SaleInitialized=true
     bulkBar.Visible=scrollMode
     saleHeader.Visible=true
     saleHeader.Position=UDim2.new(.014,0,scrollMode and .267 or .142,0)
@@ -2291,6 +2291,9 @@ refreshScrollSale=function(useCache)
         V6.CachedItems=items;V6.Unresolved=unresolved;V6.CacheReady=true
         V6.ScanAt=os.clock()
     end
+    local active={}
+    for _,r in ipairs(items) do active[r.UUID]=true end
+    for uuid in pairs(V6.Drafts) do if not active[uuid] then V6.Drafts[uuid]=nil end end
     local rarities={}
     local unknown=0
     for id in pairs(rarityInfo) do rarities[id]=true end
@@ -2370,6 +2373,7 @@ refreshScrollSale=function(useCache)
     state.ScrollWindowClear=function()
         for i in pairs(V6.Mounted) do unmount(i) end
         state.ScrollWindowUpdate=nil
+        state.VisibleScrollRows=0;state.TotalScrollRows=0
     end
     saleLayout.Parent=nil
     saleRows.CanvasPosition=Vector2 and Vector2.zero or {Y=0}
@@ -2699,7 +2703,10 @@ sellButton(sale,"ĐÓNG",.80,.008,.18,.055,function()sale.Visible=false end)
 button(panel,"BÁN HÀNG",.440,.017,.129,.055,function()
     clone.Visible=false
     sale.Visible=not sale.Visible
-    if sale.Visible and #saleRows:GetChildren()<=1 then refreshSale() end
+    if sale.Visible then
+        if not state.SaleInitialized then refreshSale()
+        elseif state.ScrollWindowUpdate then state.ScrollWindowUpdate() end
+    end
 end,Color.Green)
 
 -- STALL-F7-UNIFIED-001 START: single button + F7 in the existing Stall UI.
@@ -2904,6 +2911,8 @@ function state.SetNoRender(enabled)
 end
 state.SetNoRender(false)
 state.PerfLabel=label(panel,"F8 RENDER ON",.47,.247,.51,.036,11,true)
+state.SalePerfLabel=label(sale,"F8 RENDER ON",.755,.912,.23,.066,11,true,true)
+state.SalePerfLabel.ZIndex=23
 state.PerfAt=os.clock();state.PerfFrames=0
 function state.PerfSample()
     local now=os.clock()
@@ -2912,10 +2921,11 @@ function state.PerfSample()
     local fps=math.floor(state.PerfFrames/math.max(elapsed,.001)+.5)
     state.PerfAt=now;state.PerfFrames=0
     if panel.Visible then
-        state.PerfLabel.Text="F8 "..(state.NoRender and "NO RENDER" or "RENDER ON").." | FPS "..fps
+        state.PerfLabel.Text="F8 "..(state.NoRender and "NO RENDER" or "RENDER ON").." | Hz "..fps
             .." | ACK "..(state.LastSaleAck and tostring(math.floor(state.LastSaleAck*1000+.5)).."ms" or "-")
             .." | R "..tostring(state.SaleRemoteCount or 0)
             .." | GUI "..tostring(state.VisibleScrollRows or 0).."/"..tostring(state.TotalScrollRows or 0)
+        if sale.Visible then state.SalePerfLabel.Text=state.PerfLabel.Text end
     end
 end
 state.Conn[#state.Conn+1]=game:GetService("RunService").Heartbeat:Connect(function()state.PerfFrames=state.PerfFrames+1 end)
