@@ -151,7 +151,19 @@ local duplicate=runCase({items={
  {ItemType="Ore",ItemID="Hellstone9",Price=1560,ListingId="verified-002"}
 }})
 duplicate.buy()
-assert(duplicate.state.PurchasesSent==0,"ambiguous listings must block")
+assert(duplicate.state.PurchasesSent==1,"multiple exact-price Ore listings permit ONE purchase")
+duplicate.buy()
+assert(duplicate.state.PurchasesSent==2,"second explicit press may select a different listing")
+duplicate.buy()
+assert(duplicate.state.PurchasesSent==2,"never resend previously attempted UUID")
+local seen={}
+for _,call in ipairs(duplicate.calls) do
+    if call[1]=="Purchase" then
+        assert(call[2]==12345 and not seen[call[3]],"exact owner and distinct UUIDs")
+        seen[call[3]]=true
+    end
+end
+assert(seen["verified-001"] and seen["verified-002"])
 local unknownId=runCase({items={
  {ItemType="Ore",ItemID="Hellstone10",Price=1560}
 }})

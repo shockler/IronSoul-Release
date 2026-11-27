@@ -31,6 +31,21 @@ local _,_,poor,_,poorSum=parse({Attrs={DashCDR=10,HealthBonus=5,MoveSpeed=7,Skil
 assert(poor==0 and poorSum==0)
 local _,_,all= parse({Attrs={AttackBonus=20,SkillCDR=10,CritRate=5,CritDamage=30}})
 assert(all==4)
+local rarity=parse and loadIn(section("local rarityInfo=","local function rarityStyle").."\nreturn parseRarity",{})
+assert(rarity({Rarity=6})==6 and rarity({Info={ScrollRarity=5}})==5)
+assert(rarity({Attrs={AttackBonus=10,SkillCDR=10,CritRate=10,CritDamage=10}})==nil,
+    "never infer rolled rarity from stat count")
+local fitEnv={state={}}
+loadIn(section("-- STALL_V61_LAYOUT_BEGIN","-- STALL_V61_LAYOUT_END"),fitEnv)
+for _,width in ipairs({800,1280,1600,1920}) do
+    for _,sell in ipairs({false,true}) do
+        local cols=fitEnv.state.FitColumns({{Name="Gun Scroll: Gravity",Owner="seller"}},width,sell)
+        assert(#cols==9)
+        local sum=0
+        for _,w in ipairs(cols) do assert(w>0);sum=sum+w end
+        assert(math.abs(sum-1)<1e-9,"all nine columns fit viewport")
+    end
+end
 local function intRange(v,lo,hi)
     local n=tonumber(v)
     if n and n==n and n%1==0 and n>=lo and n<=hi then return n end
@@ -172,6 +187,12 @@ assert(records[2].GoodSum==33 and records[3].Blocked,"sort by good percentage su
 owned[#owned+1]=owned[1]
 assert(#scan()==3,"duplicate UUID inventory sources collapse")
 table.remove(owned)
+local original=owned[1].Rarity
+owned[1].Rarity=nil
+owned[#owned+1]={UUID=owned[1].UUID,ItemId=owned[1].ItemId,Rarity=6}
+assert(scan()[1].Rarity==6,"explicit rarity from later matching UUID is not lost")
+table.remove(owned)
+owned[1].Rarity=original
 local sends=0
 local se={saleAttempted={},validScrollUUID=valid,scanOwnedScrolls=scan,intRange=intRange,
     SaleGuard={Send=function(kind,id,qty,price,check,uuid)
@@ -209,7 +230,7 @@ do
     local rows=node("ScrollingFrame")
     local bar=node("Frame")
     local e={saleRows=rows,bulkBar=bar,saleTitle={},saleHeader={},SCROLL_COLUMNS={},
-        saleLayout={AbsoluteContentSize={Y=500}},state={Alive=true,Conn={}},saleBusy=false,
+        saleLayout={AbsoluteContentSize={Y=500}},state={Alive=true,Conn={},FitColumns=fitEnv.state.FitColumns},saleBusy=false,
         saleAttempted={},intRange=intRange,qualityPrice=qualityPrice,rarityInfo={[5]={},[6]={},[7]={}},
         scanOwnedScrolls=function()return {
             {UUID="ui-a",Name="A",Premium=1,GoodSum=10,Rarity=6,Min=10,Max=30,
@@ -230,13 +251,15 @@ do
     end
     e.field=function(parent,placeholder,x,y,w,h,text)return node("TextBox",parent,text)end
     e.label=function(parent,text)return node("TextLabel",parent,text)end
-    local refresh=loadIn(section("local updateBulkButtons","-- CLONE_SHARD_TAB_BEGIN")
+    local refresh=loadIn(section("local updateBulkButtons","-- STALL_V61_RESIZE_BEGIN")
         .."\nreturn refreshScrollSale",e)
     refresh()
     local children=rows:GetChildren()
-    assert(#children==3 and #children[1]:GetChildren()==9,"actual SELL renders nine columns")
-    assert(children[2].Size[1]==1500,"narrow viewport keeps horizontal table")
-    local cells=children[2]:GetChildren()
+    assert(#children==2,"fixed header outside scrolling rows")
+    assert(children[1].Size[1]==1 and children[1].Size[2]==-10 and rows.CanvasSize[1]==0,
+        "narrow viewport fits full width without horizontal canvas")
+    local cells=children[1]:GetChildren()
+    assert(#cells==10,"nine logical columns with input and button in last column")
     assert(cells[1].TextColor3=="rarity6" and cells[1].Text:find("1/5",1,true))
     for i=1,5 do assert(cells[i].Font=="GothamBold")end
     assert(cells[2].TextColor3=="95,255,135" and cells[3].TextColor3=="205,210,220")
@@ -244,15 +267,15 @@ do
     local rarityBar=bar:GetChildren()[1]
     local tabs=rarityBar:GetChildren()
     assert(#tabs==4 and tabs[1].Text=="ALL","ALL plus every native rarity, including empty")
-    tabs[2].Click()
-    assert(#rows:GetChildren()==2,"rarity tab actually filters rows")
+    tabs[3].Click()
+    assert(#rows:GetChildren()==1,"rarity tab actually filters rows")
     local maxButton
     for _,n in ipairs(nodes)do if n.Kind=="TextButton" and n.Text=="MAX" then maxButton=n end end
     maxButton.Click()
     local quantity
     for _,n in ipairs(bar:GetChildren())do if n.Kind=="TextBox" then quantity=n end end
     assert(quantity.Text=="1","MAX obeys current eligible items and verified free slots")
-    print("PASS V6 UI: nine columns, horizontal width, rarity tabs, bold stat colors, quick prices, MAX")
+    print("PASS V6.1 UI: nine columns, responsive width, rarity tabs, bold stat colors, quick prices, MAX")
 end
 
 do
