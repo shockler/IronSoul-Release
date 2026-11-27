@@ -400,6 +400,7 @@ local function absorb(slotIndex, data, detail)
     local s=slot(slotIndex)
     if s == nil or type(data)~="table" then return false end
     state.Stalls[s]=data
+    if state.RowCache then state.RowCache[s]=nil end
     if detail then state.Full[s]=data;state.FullAt[s]=os.clock() end
     state.Dirty=true
     return true
@@ -437,6 +438,7 @@ local function handleEvent(action,payload)
             if s~=nil and occupiedStall(d) then copy[s]=d end
         end
         state.Stalls=copy
+        state.RowCache={}
         state.SnapshotReceived=true
         state.EmptyCount=math.max(0,marketCap-countOccupied())
         for key,old in pairs(state.Full) do
@@ -454,6 +456,8 @@ local function handleEvent(action,payload)
             state.Stalls[s]=occupiedStall(payload.Stall) and payload.Stall or nil
             if state.SnapshotReceived then state.EmptyCount=math.max(0,marketCap-countOccupied()) end
             state.Full[s]=nil;state.FullAt[s]=nil -- stall changed; previous deep details may be stale
+            if state.RowCache then state.RowCache[s]=nil end
+            if state.OwnSaleEvent and state.OwnSaleEvent.Slot==s then state.OwnSaleEvent=nil end
             state.PendingPurchase=nil
             state.Dirty=true
         end
@@ -481,6 +485,10 @@ local function handleEvent(action,payload)
             for s,known in pairs(state.Stalls) do
                 if number(known,"OwnerUserId")==uid then
                     absorb(s,payload,true)
+                    if uid==LocalPlayer.UserId then
+                        state.OwnSaleSeq=(state.OwnSaleSeq or 0)+1
+                        state.OwnSaleEvent={Slot=s,Data=payload,Seq=state.OwnSaleSeq}
+                    end
                     break
                 end
             end
@@ -619,13 +627,17 @@ local setMarketLite=(function()
         lite.Hidden=0;lite.Scanned=0
         lite.Connections[#lite.Connections+1]=Workspace.DescendantAdded:Connect(function(obj)
             if not lite.Enabled or not state.Alive or lite.Epoch~=epoch then return end
+            if state.MarketFXVisit then state.MarketFXVisit(obj) end
             if obj:IsA("BasePart") then
                 hidePart(obj)
             elseif obj:IsA("Model") then
                 -- A fully parented building can arrive with children preloaded.
                 task.defer(function()
                     if not lite.Enabled or not state.Alive or lite.Epoch~=epoch then return end
-                    for _,desc in ipairs(obj:GetDescendants()) do hidePart(desc) end
+                    for _,desc in ipairs(obj:GetDescendants()) do
+                         if state.MarketFXVisit then state.MarketFXVisit(desc) end
+                         hidePart(desc)
+                     end
                 end)
             end
         end)
@@ -633,6 +645,7 @@ local setMarketLite=(function()
             local descendants=Workspace:GetDescendants()
             for i,obj in ipairs(descendants) do
                 if not state.Alive or not lite.Enabled or lite.Epoch~=epoch then return end
+                if state.MarketFXVisit then state.MarketFXVisit(obj) end
                 hidePart(obj)
                 if i%180==0 then task.wait() end
             end
@@ -651,14 +664,15 @@ local function setLowFX(enabled)
     if perf.LowFX==enabled then return end
     perf.LowFX=enabled
     disconnect(perf.Conns)
-    -- Market Lite follows the SAME Low FX button; no separate toggle.
+    state.MarketFXVisit=enabled and applyFX or nil
     setMarketLite(enabled)
     if not enabled then restore(perf.Changes);return end
     change(perf.Changes,Lighting,"GlobalShadows",false)
-    perf.Conns[#perf.Conns+1]=Workspace.DescendantAdded:Connect(applyFX)
+    local sharedScan=state.MarketLite and state.MarketLite.Enabled
+    if not sharedScan then perf.Conns[#perf.Conns+1]=Workspace.DescendantAdded:Connect(applyFX) end
     perf.Conns[#perf.Conns+1]=Lighting.DescendantAdded:Connect(applyFX)
     task.spawn(function()
-        for _,container in ipairs({Workspace,Lighting}) do
+        for _,container in ipairs(sharedScan and {Lighting} or {Workspace,Lighting}) do
             local objects=container:GetDescendants()
             for i,obj in ipairs(objects) do
                 if not state.Alive or not perf.LowFX then return end
@@ -998,13 +1012,16 @@ local function allRows()
     for s in pairs(state.Stalls) do allSlots[s]=true end
     for s in pairs(state.Full) do allSlots[s]=true end
     for s in pairs(allSlots) do
-        local byId={}
         local summary=state.Stalls[s]
         local full=state.Full[s]
+        state.RowCache=state.RowCache or {}
+        local cached=state.RowCache[s]
         if summary and full and summary.OwnerUserId and full.OwnerUserId
             and summary.OwnerUserId~=full.OwnerUserId then full=nil end
         -- Merge summary and detail by UUID. Neither a partial StallView nor
         -- an old cached summary should silently erase unique scroll listings.
+        if not cached or cached.Summary~=summary or cached.Full~=full then
+            local byId={}
         if summary then
             for _,r in ipairs(extractItems(summary,s,false)) do
                 byId[r.ListingId or (r.Id..":"..r.RawKey)]=r
@@ -1015,8 +1032,14 @@ local function allRows()
                 byId[r.ListingId or (r.Id..":"..r.RawKey)]=r
             end
         end
-        for _,r in pairs(byId) do rows[#rows+1]=r end
+            local normalized={}
+            for _,r in pairs(byId) do normalized[#normalized+1]=r end
+            cached={Summary=summary,Full=full,Rows=normalized}
+            state.RowCache[s]=cached
+        end
+        for _,r in ipairs(cached.Rows) do rows[#rows+1]=r end
     end
+    for s in pairs(state.RowCache or {}) do if not allSlots[s] then state.RowCache[s]=nil end end
     return rows
 end
 -- Compare purchase identity, not a display fingerprint: BoothShows and StallView
@@ -1634,6 +1657,7 @@ end
 function SaleGuard.Snapshot()
     if not state.Alive or saleStop or not marketPlace() then return nil,"Đã dừng/rời Market" end
     local before=state.RefreshCount
+    state.SaleRemoteCount=(state.SaleRemoteCount or 0)+1
     local ok=pcall(function()BoothRE:FireServer("RequestBoothShows")end)
     if not ok or not SaleGuard.Wait(function()return state.RefreshCount>before end,6) then
         return nil,"Không xác minh được quầy mới"
@@ -1647,6 +1671,7 @@ function SaleGuard.Snapshot()
     end
     if not own then return nil,"Chưa có quầy của bạn" end
     state.Full[own]=nil;state.FullAt[own]=nil;state.ResponseSlot=nil
+    state.SaleRemoteCount=(state.SaleRemoteCount or 0)+1
     ok=pcall(function()BoothRE:FireServer("InteractStall",own)end)
     local detail=ok and SaleGuard.Wait(function()
         return state.ResponseSlot==own and state.Full[own]
@@ -1654,6 +1679,10 @@ function SaleGuard.Snapshot()
     if not detail or positiveUserId(detail)~=LocalPlayer.UserId or type(detail.Items)~="table" then
         return nil,"Không xác minh được danh sách listing"
     end
+    return SaleGuard.ParseSnapshot(own,detail)
+end
+function SaleGuard.ParseSnapshot(own,detail)
+    if type(detail)~="table" or positiveUserId(detail)~=LocalPlayer.UserId or type(detail.Items)~="table" then return nil end
     local snap={Slot=own,Count=0,Ids={},Items={}}
     for key,item in pairs(detail.Items) do
         if type(item)~="table" then return nil,"Listing không hợp lệ" end
@@ -1683,6 +1712,16 @@ function SaleGuard.Confirmed(pending,after)
     local ok,changed=pcall(pending.Check,true)
     return matches==1 and ok and changed==true
 end
+-- Partial or stale events cannot confirm a sale.
+function SaleGuard.EventSnapshot(pending)
+    local event=state.OwnSaleEvent
+    if not event or event.Seq<=(pending.EventSeq or 0) or event.Slot~=pending.Snapshot.Slot then return nil end
+    if positiveUserId(state.Stalls[event.Slot])~=LocalPlayer.UserId then return nil end
+    local snap=SaleGuard.ParseSnapshot(event.Slot,event.Data)
+    if not snap or snap.Count~=pending.Snapshot.Count+1 then return nil end
+    for id in pairs(pending.Snapshot.Ids) do if not snap.Ids[id] then return nil end end
+    if SaleGuard.Confirmed(pending,snap) then return snap end
+end
 function SaleGuard.Reconcile()
     local pending=SaleGuard.Pending
     if not pending then return true end
@@ -1709,17 +1748,27 @@ function SaleGuard.Send(kind,id,quantity,price,check,uuid)
     if not valid then return false,reason or "Túi đã thay đổi" end
     if not state.Alive or saleStop or not marketPlace() then return false,"Đã dừng" end
     -- Reserve BEFORE dispatch. An uncertain result survives panel changes/reinjection.
-    local pending={Kind=kind,Id=id,Quantity=quantity,Price=price,UUID=uuid,Snapshot=snap,Check=check}
+    local pending={Kind=kind,Id=id,Quantity=quantity,Price=price,UUID=uuid,Snapshot=snap,Check=check,EventSeq=state.OwnSaleSeq or 0}
     SaleGuard.Pending=pending;env.IronSoulStallSalePending=pending
+    local sentAt=os.clock()
+    state.SaleRemoteCount=(state.SaleRemoteCount or 0)+1
     local sent,sendErr=pcall(function()
         if kind=="Scroll" then BoothRE:FireServer("List",uuid,price)
         else BoothRE:FireServer("ListStack","Ore",id,quantity,price) end
     end)
     if not sent then return false,"Gửi lỗi; kết quả chưa rõ: "..tostring(sendErr) end
     local deadline=os.clock()+10
+    local eventAck=SaleGuard.Wait(function()return SaleGuard.EventSnapshot(pending)end,.45)
+    if eventAck then
+        state.LastSaleAck=os.clock()-sentAt
+        SaleGuard.Pending=nil;env.IronSoulStallSalePending=nil
+        return true
+    end
+    if not state.Alive or saleStop then return false,"Chưa xác nhận listing; đã dừng" end
     repeat
         local after=SaleGuard.Snapshot()
         if SaleGuard.Confirmed(pending,after) then
+            state.LastSaleAck=os.clock()-sentAt
             SaleGuard.Pending=nil;env.IronSoulStallSalePending=nil
             return true
         end
@@ -2846,6 +2895,31 @@ local function stallBackLobby()
 end
 state.ReturnLobby=stallBackLobby
 -- STALL-B-LOBBY-001 END
+-- STALL_V63_PERF_BEGIN
+state.NoRender=false
+function state.SetNoRender(enabled)
+    local ok=pcall(function()game:GetService("RunService"):Set3dRenderingEnabled(not enabled)end)
+    if ok then state.NoRender=enabled end
+    return ok
+end
+state.SetNoRender(false)
+state.PerfLabel=label(panel,"F8 RENDER ON",.47,.247,.51,.036,11,true)
+state.PerfAt=os.clock();state.PerfFrames=0
+function state.PerfSample()
+    local now=os.clock()
+    local elapsed=now-state.PerfAt
+    if elapsed<2 then return end
+    local fps=math.floor(state.PerfFrames/math.max(elapsed,.001)+.5)
+    state.PerfAt=now;state.PerfFrames=0
+    if panel.Visible then
+        state.PerfLabel.Text="F8 "..(state.NoRender and "NO RENDER" or "RENDER ON").." | FPS "..fps
+            .." | ACK "..(state.LastSaleAck and tostring(math.floor(state.LastSaleAck*1000+.5)).."ms" or "-")
+            .." | R "..tostring(state.SaleRemoteCount or 0)
+            .." | GUI "..tostring(state.VisibleScrollRows or 0).."/"..tostring(state.TotalScrollRows or 0)
+    end
+end
+state.Conn[#state.Conn+1]=game:GetService("RunService").Heartbeat:Connect(function()state.PerfFrames=state.PerfFrames+1 end)
+-- STALL_V63_PERF_END
 state.Conn[#state.Conn+1]=Input.InputBegan:Connect(function(key,handled)
     if not state.Alive or handled or Input:GetFocusedTextBox() then return end
     if key.KeyCode==Enum.KeyCode.H then
@@ -2854,11 +2928,17 @@ state.Conn[#state.Conn+1]=Input.InputBegan:Connect(function(key,handled)
         stallBackLobby()
     elseif key.KeyCode==Enum.KeyCode.F7 then
         if state.F7BuyExact then state.F7BuyExact() end
+    elseif key.KeyCode==Enum.KeyCode.F8 then
+        local ok=state.SetNoRender(not state.NoRender)
+        say(ok and (state.NoRender and "NO RENDER ON" or "NO RENDER OFF") or "NO RENDER không được hỗ trợ")
     end
 end)
 function state.Stop()
     state.Alive=false;state.Cancel=true;state.PendingPurchase=nil
     saleStop=true
+    if state.NoRender then state.SetNoRender(false) end
+    state.RowCache=nil
+    state.OwnSaleEvent=nil
     if state.ScrollWindowClear then state.ScrollWindowClear() end
     if not saleLayout.Parent then saleLayout:Destroy() end
     state.ScrollWindowClear=nil;state.ScrollWindowUpdate=nil
@@ -2872,6 +2952,7 @@ task.spawn(function()
     while state.Alive do
         task.wait(.35)
         if state.Alive then
+            state.PerfSample()
             if state.PendingPurchase and state.PendingPurchase.Ready and
                 os.clock()>state.PendingPurchase.Expires then
                 state.PendingPurchase=nil
